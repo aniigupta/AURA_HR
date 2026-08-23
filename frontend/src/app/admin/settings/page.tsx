@@ -3,10 +3,11 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/utils/api";
+import { useAuth } from "@/context/AuthContext";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button, Input, Skeleton } from "@/components/ui/atoms";
+import { Button, Input, Skeleton, Badge } from "@/components/ui/atoms";
 import { toast } from "@/components/ui/toast";
-import { MapPin, Clock, CalendarDays, Plus, Trash2, ShieldAlert } from "lucide-react";
+import { MapPin, Clock, CalendarDays, Plus, Trash2, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog } from "@/components/ui/dialog";
 
@@ -133,6 +134,161 @@ function OfficeSettingsForm({ initialData }: { initialData: OfficeSettingsData }
         </Button>
       </div>
     </form>
+  );
+}
+
+function MfaSecurityCard() {
+  const { user, refreshUser } = useAuth();
+  const [isSetupOpen, setIsSetupOpen] = useState(false);
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [enableCode, setEnableCode] = useState("");
+  const [isDisableOpen, setIsDisableOpen] = useState(false);
+  const [disablePassword, setDisablePassword] = useState("");
+
+  const setupMutation = useMutation({
+    mutationFn: () => apiFetch<{ secret: string; qr_code_base64: string }>("/auth/mfa/setup", { method: "POST" }),
+    onSuccess: (data) => {
+      setSecret(data.secret);
+      setQrCode(data.qr_code_base64);
+      setIsSetupOpen(true);
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : "Failed to start MFA setup.");
+    }
+  });
+
+  const enableMutation = useMutation({
+    mutationFn: (code: string) => apiFetch("/auth/mfa/enable", { method: "POST", body: JSON.stringify({ code }) }),
+    onSuccess: async () => {
+      toast.success("Two-factor authentication enabled.");
+      setIsSetupOpen(false);
+      setEnableCode("");
+      setQrCode(null);
+      setSecret(null);
+      await refreshUser();
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : "Invalid authentication code.");
+    }
+  });
+
+  const disableMutation = useMutation({
+    mutationFn: (password: string) => apiFetch("/auth/mfa/disable", { method: "POST", body: JSON.stringify({ password }) }),
+    onSuccess: async () => {
+      toast.success("Two-factor authentication disabled.");
+      setIsDisableOpen(false);
+      setDisablePassword("");
+      await refreshUser();
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : "Incorrect password.");
+    }
+  });
+
+  const handleEnableSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (enableCode.length !== 6) {
+      toast.error("Enter the 6-digit code from your authenticator app.");
+      return;
+    }
+    enableMutation.mutate(enableCode);
+  };
+
+  const handleDisableSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!disablePassword) {
+      toast.error("Enter your password to confirm.");
+      return;
+    }
+    disableMutation.mutate(disablePassword);
+  };
+
+  return (
+    <Card className="bg-white border-slate-200 p-4 sm:p-5">
+      <CardHeader className="flex flex-row items-center gap-3 p-0 pb-4 border-b border-slate-100">
+        <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600 shrink-0">
+          <ShieldCheck className="h-5 w-5" />
+        </div>
+        <div>
+          <CardTitle className="text-xs sm:text-sm font-bold text-slate-900">TWO-FACTOR AUTHENTICATION</CardTitle>
+          <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">Extra login verification for your own Admin account</p>
+        </div>
+      </CardHeader>
+
+      <div className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Badge variant={user?.mfa_enabled ? "success" : "neutral"}>
+            {user?.mfa_enabled ? "Enabled" : "Disabled"}
+          </Badge>
+          <span className="text-xs text-slate-500">
+            {user?.mfa_enabled
+              ? "Your account requires a code from your authenticator app at login."
+              : "Your account currently only requires a password at login."}
+          </span>
+        </div>
+        {user?.mfa_enabled ? (
+          <Button size="sm" variant="outline" onClick={() => setIsDisableOpen(true)} className="shrink-0">
+            Disable
+          </Button>
+        ) : (
+          <Button size="sm" onClick={() => setupMutation.mutate()} disabled={setupMutation.isPending} className="shrink-0">
+            {setupMutation.isPending ? "Generating..." : "Enable MFA"}
+          </Button>
+        )}
+      </div>
+
+      <Dialog isOpen={isSetupOpen} onClose={() => setIsSetupOpen(false)} title="Set Up Two-Factor Authentication" size="sm">
+        <div className="space-y-3">
+          <p className="text-xs text-slate-600">
+            Scan this QR code with an authenticator app (Google Authenticator, Authy, 1Password, etc.), then enter the 6-digit code it generates to confirm.
+          </p>
+          {qrCode && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={qrCode} alt="MFA enrollment QR code" className="mx-auto w-40 h-40 rounded-lg border border-slate-200" />
+          )}
+          {secret && (
+            <p className="text-[11px] text-slate-500 text-center break-all">
+              Can&apos;t scan? Enter manually: <span className="font-mono font-semibold text-slate-700">{secret}</span>
+            </p>
+          )}
+          <form onSubmit={handleEnableSubmit} className="space-y-3 pt-2 border-t border-slate-100">
+            <Input
+              label="6-Digit Code"
+              inputMode="numeric"
+              placeholder="123456"
+              value={enableCode}
+              onChange={(e) => setEnableCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              maxLength={6}
+            />
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setIsSetupOpen(false)}>Cancel</Button>
+              <Button type="submit" size="sm" disabled={enableMutation.isPending || enableCode.length !== 6}>
+                {enableMutation.isPending ? "Verifying..." : "Confirm & Enable"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      </Dialog>
+
+      <Dialog isOpen={isDisableOpen} onClose={() => setIsDisableOpen(false)} title="Disable Two-Factor Authentication" size="sm">
+        <form onSubmit={handleDisableSubmit} className="space-y-3">
+          <p className="text-xs text-slate-600">Enter your password to confirm disabling MFA on your account.</p>
+          <Input
+            label="Password"
+            type="password"
+            value={disablePassword}
+            onChange={(e) => setDisablePassword(e.target.value)}
+          />
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setIsDisableOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="destructive" size="sm" disabled={disableMutation.isPending}>
+              {disableMutation.isPending ? "Disabling..." : "Disable MFA"}
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+    </Card>
   );
 }
 
@@ -297,6 +453,8 @@ export default function OfficeSettingsPage() {
           </Card>
         </div>
       </div>
+
+      <MfaSecurityCard />
 
       {/* ADD HOLIDAY DIALOG */}
       <Dialog isOpen={isHolidayOpen} onClose={() => setIsHolidayOpen(false)} title="Configure New Public Holiday" size="sm">

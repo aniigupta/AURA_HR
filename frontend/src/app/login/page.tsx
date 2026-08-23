@@ -6,15 +6,17 @@ import { Button, Input } from "@/components/ui/atoms";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { toast } from "@/components/ui/toast";
 import { Lock, Mail, ShieldCheck, Sparkles } from "lucide-react";
-import { apiFetch } from "@/utils/api";
+import { apiFetch, ApiError } from "@/utils/api";
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, verifyMfa } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isForgot, setIsForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,11 +27,36 @@ export default function LoginPage() {
 
     setIsLoading(true);
     try {
-      await login(email, password);
+      const result = await login(email, password);
+      if (result.mfaRequired && result.mfaToken) {
+        setMfaToken(result.mfaToken);
+        setIsLoading(false);
+        return;
+      }
       toast.success("Successfully logged in!");
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : "Failed to sign in. Please verify your credentials.";
       toast.error(errorMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleMfaVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mfaToken || mfaCode.length !== 6) {
+      toast.error("Enter the 6-digit code from your authenticator app.");
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      await verifyMfa(mfaToken, mfaCode);
+      toast.success("Successfully logged in!");
+    } catch (err: unknown) {
+      const errorMsg = err instanceof ApiError ? err.message : "Invalid authentication code.";
+      toast.error(errorMsg);
+      setMfaCode("");
     } finally {
       setIsLoading(false);
     }
@@ -59,16 +86,6 @@ export default function LoginPage() {
     }
   };
 
-  const fillCredentials = (role: "admin" | "employee") => {
-    if (role === "admin") {
-      setEmail("admin@company.com");
-      setPassword("adminpassword");
-    } else {
-      setEmail("employee@company.com");
-      setPassword("employeepassword");
-    }
-  };
-
   return (
     <div className="flex flex-1 items-center justify-center min-h-screen p-3.5 sm:p-4 bg-slate-50">
       <div className="w-full max-w-md">
@@ -88,7 +105,63 @@ export default function LoginPage() {
 
         {/* Card Component */}
         <Card className="bg-white border border-slate-200 card-shadow p-2 sm:p-3">
-          {!isForgot ? (
+          {mfaToken ? (
+            <>
+              <CardHeader className="space-y-1 pb-3 sm:pb-4">
+                <CardTitle className="text-base sm:text-lg text-slate-900 font-bold text-center flex items-center justify-center gap-1.5">
+                  <ShieldCheck className="h-4 w-4 text-indigo-600" />
+                  Two-Factor Verification
+                </CardTitle>
+                <CardDescription className="text-center text-xs text-slate-500">
+                  Enter the 6-digit code from your authenticator app
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <form onSubmit={handleMfaVerify} className="space-y-3.5">
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    label="Authentication Code"
+                    placeholder="123456"
+                    value={mfaCode}
+                    onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    disabled={isLoading}
+                    icon={<ShieldCheck className="h-4 w-4" />}
+                    maxLength={6}
+                  />
+
+                  <div className="flex flex-col gap-2">
+                    <Button
+                      type="submit"
+                      size="lg"
+                      className="w-full flex justify-center font-semibold"
+                      disabled={isLoading || mfaCode.length !== 6}
+                    >
+                      {isLoading ? (
+                        <span className="w-5 h-5 rounded-full border-2 border-white/20 border-t-white animate-spin"></span>
+                      ) : (
+                        "Verify"
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setMfaToken(null);
+                        setMfaCode("");
+                        setPassword("");
+                      }}
+                      className="w-full text-slate-500"
+                      disabled={isLoading}
+                    >
+                      Back to Sign In
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </>
+          ) : !isForgot ? (
             <>
               <CardHeader className="space-y-1 pb-3 sm:pb-4">
                 <CardTitle className="text-base sm:text-lg text-slate-900 font-bold text-center">Sign In to Your Account</CardTitle>
@@ -142,34 +215,6 @@ export default function LoginPage() {
                     )}
                   </Button>
                 </form>
-
-                {/* Dummy Login helpers */}
-                <div className="mt-5 sm:mt-6 pt-4 sm:pt-5 border-t border-slate-100">
-                  <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-2.5 font-semibold justify-center">
-                    <ShieldCheck className="h-4 w-4 text-indigo-600" />
-                    Quick Testing Presets:
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => fillCredentials("admin")}
-                      className="w-full text-xs"
-                    >
-                      Admin Preset
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => fillCredentials("employee")}
-                      className="w-full text-xs"
-                    >
-                      Employee Preset
-                    </Button>
-                  </div>
-                </div>
               </CardContent>
             </>
           ) : (

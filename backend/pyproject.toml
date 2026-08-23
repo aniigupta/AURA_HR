@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+addopts = "--cov=app --cov-report=term-missing --cov-fail-under=75"
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/seed.py"]

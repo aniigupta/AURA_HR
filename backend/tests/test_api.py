@@ -1,3 +1,5 @@
+import base64
+from io import BytesIO
 import pytest
 from datetime import date
 from uuid import UUID
@@ -22,6 +24,118 @@ def test_login_invalid_credentials(client):
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "Incorrect email or password"
+
+# --- Account Lockout Tests ---
+# NOTE: these deliberately avoid hammering /api/auth/login repeatedly — that
+# endpoint shares a 10/minute rate limit across the whole test session (keyed
+# by the TestClient's fixed source IP), so repeated real failed-login HTTP
+# calls here would eat into the same budget as every other login test in this
+# file and risk flaky 429s unrelated to what's actually being tested.
+
+def test_account_lockout_logic(db):
+    from app.core.utils import is_login_locked_out, record_failed_login, clear_failed_logins
+    from app.core.config import settings
+    email = "lockout-logic-test@company.com"
+    clear_failed_logins(email)
+    try:
+        assert is_login_locked_out(email) is False
+        for _ in range(settings.FAILED_LOGIN_LOCKOUT_THRESHOLD):
+            record_failed_login(email)
+        assert is_login_locked_out(email) is True
+    finally:
+        clear_failed_logins(email)
+    assert is_login_locked_out(email) is False
+
+def test_login_endpoint_returns_429_when_locked_out(client):
+    from app.core.utils import record_failed_login, clear_failed_logins
+    from app.core.config import settings
+    email = "lockout-http-test@company.com"
+    clear_failed_logins(email)
+    try:
+        for _ in range(settings.FAILED_LOGIN_LOCKOUT_THRESHOLD):
+            record_failed_login(email)
+        res = client.post("/api/auth/login", json={"email": email, "password": "irrelevant"})
+        assert res.status_code == 429
+        assert "too many failed login attempts" in res.json()["detail"].lower()
+    finally:
+        clear_failed_logins(email)
+
+def test_successful_login_clears_lockout_counter(client):
+    from app.core.utils import record_failed_login, is_login_locked_out, clear_failed_logins
+    email = "test_employee@company.com"
+    clear_failed_logins(email)
+    record_failed_login(email)  # one failure, well under the threshold
+    res = client.post("/api/auth/login", json={"email": email, "password": "employeepassword"})
+    assert res.status_code == 200
+    assert is_login_locked_out(email) is False
+
+# --- MFA (TOTP) Tests ---
+
+def test_mfa_full_enrollment_and_login_flow(admin_client, client, db):
+    import pyotp
+    from app.models.models import User
+
+    # 1. Setup returns a secret + QR code, but doesn't enable MFA yet
+    setup_res = admin_client.post("/api/auth/mfa/setup")
+    assert setup_res.status_code == 200
+    secret = setup_res.json()["secret"]
+    assert setup_res.json()["qr_code_base64"].startswith("data:image/png;base64,")
+
+    db.expire_all()
+    admin_user = db.query(User).filter(User.email == "test_admin@company.com").first()
+    assert admin_user.mfa_enabled is False
+
+    # 2. Enable requires proving possession of the authenticator
+    enable_res = admin_client.post("/api/auth/mfa/enable", json={"code": pyotp.TOTP(secret).now()})
+    assert enable_res.status_code == 200
+
+    db.expire_all()
+    admin_user = db.query(User).filter(User.email == "test_admin@company.com").first()
+    assert admin_user.mfa_enabled is True
+
+    # 3. A real login now returns a challenge instead of a session
+    login_res = client.post("/api/auth/login", json={"email": "test_admin@company.com", "password": "adminpassword"})
+    assert login_res.status_code == 200
+    login_body = login_res.json()
+    assert login_body["mfa_required"] is True
+    assert "access_token" not in login_res.cookies
+    mfa_token = login_body["mfa_token"]
+
+    # 4. Verifying with a fresh valid code completes the session
+    verify_res = client.post("/api/auth/mfa/verify", json={"mfa_token": mfa_token, "code": pyotp.TOTP(secret).now()})
+    assert verify_res.status_code == 200
+    assert verify_res.json()["user"]["email"] == "test_admin@company.com"
+    assert "access_token" in verify_res.cookies
+    assert "refresh_token" in verify_res.cookies
+
+def test_mfa_verify_rejects_invalid_code(admin_client, client):
+    import pyotp
+    secret = admin_client.post("/api/auth/mfa/setup").json()["secret"]
+    admin_client.post("/api/auth/mfa/enable", json={"code": pyotp.TOTP(secret).now()})
+
+    login_res = client.post("/api/auth/login", json={"email": "test_admin@company.com", "password": "adminpassword"})
+    mfa_token = login_res.json()["mfa_token"]
+
+    bad_res = client.post("/api/auth/mfa/verify", json={"mfa_token": mfa_token, "code": "000000"})
+    assert bad_res.status_code == 400
+
+def test_mfa_disable_requires_correct_password(admin_client, db):
+    import pyotp
+    from app.models.models import User
+
+    secret = admin_client.post("/api/auth/mfa/setup").json()["secret"]
+    admin_client.post("/api/auth/mfa/enable", json={"code": pyotp.TOTP(secret).now()})
+
+    wrong_res = admin_client.post("/api/auth/mfa/disable", json={"password": "wrongpassword"})
+    assert wrong_res.status_code == 400
+
+    ok_res = admin_client.post("/api/auth/mfa/disable", json={"password": "adminpassword"})
+    assert ok_res.status_code == 200
+
+    db.expire_all()
+    admin_user = db.query(User).filter(User.email == "test_admin@company.com").first()
+    assert admin_user.mfa_enabled is False
+    assert admin_user.totp_secret is None
 
 # --- Employee RBAC & Profile Wiping Fix Tests ---
 
@@ -284,4 +398,228 @@ def test_holiday_crud_flow(admin_client):
     # Deleting holiday
     del_res = admin_client.delete(f"/api/settings/holidays/{holiday_id}")
     assert del_res.status_code == 200
+
+# --- Password Strength Validation Tests ---
+
+def test_password_strength_rejected_on_employee_create(admin_client):
+    weak_payload = {
+        "email": "weakpass@company.com",
+        "password": "weak",
+        "role": "Employee",
+        "profile": {
+            "first_name": "Weak",
+            "last_name": "Pass",
+            "employee_id": "EMP999",
+        }
+    }
+    res = admin_client.post("/api/employees/", json=weak_payload)
+    assert res.status_code == 422
+
+def test_password_strength_rejected_on_change_password(employee_client):
+    # No digit / no uppercase -> rejected before it ever reaches the handler
+    res = employee_client.post(
+        "/api/auth/change-password",
+        json={"old_password": "employeepassword", "new_password": "alllowercase"}
+    )
+    assert res.status_code == 422
+
+def test_strong_password_accepted_on_change_password(employee_client):
+    res = employee_client.post(
+        "/api/auth/change-password",
+        json={"old_password": "employeepassword", "new_password": "NewStrongPass1"}
+    )
+    assert res.status_code == 200
+
+# --- Avatar Upload Content Validation Tests ---
+
+def test_avatar_upload_rejects_non_image_content(employee_client, db):
+    emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == "EMP001").first()
+    fake_file = BytesIO(b"not actually an image, just plain text bytes")
+    res = employee_client.post(
+        f"/api/employees/{emp_profile.user_id}/upload-avatar",
+        files={"file": ("fake.jpg", fake_file, "image/jpeg")}
+    )
+    assert res.status_code == 400
+    assert "not a valid image" in res.json()["detail"].lower()
+
+def test_avatar_upload_accepts_real_image(employee_client, db):
+    emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == "EMP001").first()
+    tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    png_bytes = base64.b64decode(tiny_png_b64)
+    res = employee_client.post(
+        f"/api/employees/{emp_profile.user_id}/upload-avatar",
+        files={"file": ("avatar.png", BytesIO(png_bytes), "image/png")}
+    )
+    assert res.status_code == 200
+    assert "profile_image_url" in res.json()
+
+# --- Employee Admin CRUD Lifecycle Tests ---
+
+def test_create_employee_admin_flow(admin_client, employee_client, db):
+    payload = {
+        "email": "new.hire@company.com",
+        "password": "NewHireStrongPass1",
+        "role": "Employee",
+        "profile": {
+            "first_name": "New",
+            "last_name": "Hire",
+            "employee_id": "EMP500",
+        }
+    }
+    res = admin_client.post("/api/employees/", json=payload)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["email"] == "new.hire@company.com"
+    assert body["profile"]["employee_id"] == "EMP500"
+
+    # Duplicate email is rejected
+    dup_res = admin_client.post("/api/employees/", json=payload)
+    assert dup_res.status_code == 400
+
+    # Non-admins cannot create employees
+    forbidden_res = employee_client.post("/api/employees/", json={**payload, "email": "other@company.com", "profile": {**payload["profile"], "employee_id": "EMP501"}})
+    assert forbidden_res.status_code == 403
+
+def test_toggle_employee_status_admin_only(admin_client, employee_client, db):
+    emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == "EMP001").first()
+    user_id = emp_profile.user_id
+
+    forbidden_res = employee_client.patch(f"/api/employees/{user_id}/toggle-status")
+    assert forbidden_res.status_code == 403
+
+    res = admin_client.patch(f"/api/employees/{user_id}/toggle-status")
+    assert res.status_code == 200
+
+    db.expire_all()
+    user = db.query(User).filter(User.id == user_id).first()
+    assert user.is_active is False
+
+def test_admin_reset_employee_password(admin_client, client, db):
+    emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == "EMP001").first()
+    user_id = emp_profile.user_id
+
+    res = admin_client.post(f"/api/employees/{user_id}/reset-password", json={"new_password": "AdminSetPass1"})
+    assert res.status_code == 200
+
+    # Weak password rejected by the same strength validator used everywhere else
+    weak_res = admin_client.post(f"/api/employees/{user_id}/reset-password", json={"new_password": "weak"})
+    assert weak_res.status_code == 422
+
+    # New password actually works for login
+    login_res = client.post("/api/auth/login", json={"email": "test_employee@company.com", "password": "AdminSetPass1"})
+    assert login_res.status_code == 200
+
+def test_delete_employee_admin_only(admin_client, employee_client, db):
+    emp_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == "EMP001").first()
+    user_id = emp_profile.user_id
+
+    forbidden_res = employee_client.delete(f"/api/employees/{user_id}")
+    assert forbidden_res.status_code == 403
+
+    res = admin_client.delete(f"/api/employees/{user_id}")
+    assert res.status_code == 200
+
+    db.expire_all()
+    assert db.query(User).filter(User.id == user_id).first() is None
+
+def test_department_create_and_duplicate_rejection(admin_client, employee_client):
+    res = admin_client.post("/api/employees/departments", json={"name": "Legal", "description": "Legal & Compliance"})
+    assert res.status_code == 200
+
+    dup_res = admin_client.post("/api/employees/departments", json={"name": "Legal", "description": "duplicate"})
+    assert dup_res.status_code == 400
+
+    forbidden_res = employee_client.post("/api/employees/departments", json={"name": "Another Dept"})
+    assert forbidden_res.status_code == 403
+
+# --- Dashboard Analytics Tests ---
+
+def test_admin_dashboard_returns_expected_shape(admin_client, employee_client):
+    forbidden_res = employee_client.get("/api/dashboard/admin")
+    assert forbidden_res.status_code == 403
+
+    res = admin_client.get("/api/dashboard/admin")
+    assert res.status_code == 200
+    body = res.json()
+    assert "cards" in body
+    assert "total_employees" in body["cards"]
+    assert "graphs" in body
+    assert "daily" in body["graphs"] and "monthly" in body["graphs"]
+    assert "needs_attention" in body
+    assert "currently_working" in body
+
+def test_employee_dashboard_returns_expected_shape(employee_client):
+    res = employee_client.get("/api/dashboard/employee")
+    assert res.status_code == 200
+    body = res.json()
+    assert "today" in body
+    assert "status" in body["today"]
+    assert "stats" in body
+    assert "leave_balances" in body["stats"]
+
+def test_employee_dashboard_reflects_after_clock_in(employee_client):
+    clock_in_payload = {
+        "latitude": 28.3971956,
+        "longitude": 77.3131177,
+        "selfie_base64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "gps_accuracy": 10.0,
+    }
+    employee_client.post("/api/attendance/clock-in", json=clock_in_payload)
+
+    res = employee_client.get("/api/dashboard/employee")
+    assert res.status_code == 200
+    assert res.json()["today"]["status"] in ["Present", "Late", "Work From Home"]
+    assert res.json()["today"]["clock_in"] is not None
+
+# --- Office Settings Tests ---
+
+def test_office_settings_get_creates_default_then_admin_can_update(admin_client, employee_client):
+    # First read creates the single-row default if it doesn't exist yet
+    get_res = employee_client.get("/api/settings/office")
+    assert get_res.status_code == 200
+    assert get_res.json()["id"] == 1
+
+    forbidden_res = employee_client.put("/api/settings/office", json={"allowed_radius": 200.0})
+    assert forbidden_res.status_code == 403
+
+    update_res = admin_client.put("/api/settings/office", json={"allowed_radius": 200.0, "timezone": "Asia/Kolkata"})
+    assert update_res.status_code == 200
+    assert update_res.json()["allowed_radius"] == 200.0
+
+# --- General Attendance Reports & Exports Tests ---
+
+def test_reports_summary_and_csv_export(admin_client, employee_client):
+    forbidden_res = employee_client.get("/api/reports/summary")
+    assert forbidden_res.status_code == 403
+
+    summary_res = admin_client.get("/api/reports/summary")
+    assert summary_res.status_code == 200
+    assert isinstance(summary_res.json(), list)
+
+    csv_res = admin_client.get("/api/reports/export/csv")
+    assert csv_res.status_code == 200
+    assert "csv" in csv_res.headers["content-type"]
+
+def test_reports_excel_and_pdf_export(admin_client):
+    excel_res = admin_client.get("/api/reports/export/excel")
+    assert excel_res.status_code == 200
+    assert "spreadsheetml" in excel_res.headers["content-type"]
+
+    pdf_res = admin_client.get("/api/reports/export/pdf")
+    assert pdf_res.status_code == 200
+    assert "pdf" in pdf_res.headers["content-type"]
+
+def test_reports_reflect_attendance_data(admin_client, employee_client):
+    clock_in_payload = {
+        "latitude": 28.3971956,
+        "longitude": 77.3131177,
+        "selfie_base64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "gps_accuracy": 10.0,
+    }
+    employee_client.post("/api/attendance/clock-in", json=clock_in_payload)
+
+    res = admin_client.get("/api/reports/summary")
+    assert res.status_code == 200
+    data = res.json()
+    assert any(row["employee_id"] == "EMP001" for row in data)
 

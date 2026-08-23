@@ -30,14 +30,22 @@ interface FetchOptions extends RequestInit {
 }
 
 let isRefreshing = false;
-let refreshSubscribers: ((token: string) => void)[] = [];
+let refreshSubscribers: {
+  resolve: () => void;
+  reject: (err: unknown) => void;
+}[] = [];
 
-function subscribeTokenRefresh(cb: (token: string) => void) {
-  refreshSubscribers.push(cb);
+function subscribeTokenRefresh(resolve: () => void, reject: (err: unknown) => void) {
+  refreshSubscribers.push({ resolve, reject });
 }
 
-function onRefreshed(token: string) {
-  refreshSubscribers.forEach((cb) => cb(token));
+function onRefreshed() {
+  refreshSubscribers.forEach(({ resolve }) => resolve());
+  refreshSubscribers = [];
+}
+
+function onRefreshFailed(err: unknown) {
+  refreshSubscribers.forEach(({ reject }) => reject(err));
   refreshSubscribers = [];
 }
 
@@ -91,24 +99,33 @@ export async function apiFetch<T = unknown>(endpoint: string, options: FetchOpti
           });
 
           if (refreshRes.ok) {
-            const data = await refreshRes.json();
             isRefreshing = false;
-            onRefreshed(data.access_token);
+            onRefreshed();
+            // Retry the original request
+            return await apiFetch<T>(endpoint, options);
           } else {
             isRefreshing = false;
-            throw new ApiError("Session expired", 401);
+            const err = new ApiError("Session expired", 401);
+            onRefreshFailed(err);
+            throw err;
           }
         } catch (refreshErr) {
           isRefreshing = false;
+          onRefreshFailed(refreshErr);
           throw refreshErr;
         }
       }
 
-      // Queue original requests until token is refreshed
-      return new Promise<T>((resolve) => {
-        subscribeTokenRefresh(() => {
-          resolve(apiFetch<T>(endpoint, options));
-        });
+      // Queue original requests until the refresh cookie is renewed
+      return new Promise<T>((resolve, reject) => {
+        subscribeTokenRefresh(
+          () => {
+            resolve(apiFetch<T>(endpoint, options));
+          },
+          (err) => {
+            reject(err);
+          }
+        );
       });
     }
 

@@ -1,20 +1,54 @@
 import os
+import secrets
+import logging
 from typing import List, Set
 from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger("aurawork.config")
+
+_environment = os.getenv("ENVIRONMENT", "development")
+
+_secret_key = os.getenv("SECRET_KEY", "")
+if not _secret_key:
+    if _environment == "production":
+        raise RuntimeError(
+            "SECRET_KEY environment variable is required in production. "
+            "Generate one with: openssl rand -hex 32"
+        )
+    _secret_key = secrets.token_hex(32)
+    logger.warning(
+        "SECRET_KEY not set — generated a temporary development key. "
+        "All sessions will be invalidated on restart. Set SECRET_KEY in backend/.env to avoid this."
+    )
+
+_database_url = os.getenv("DATABASE_URL", "")
+if not _database_url:
+    if _environment == "production":
+        raise RuntimeError("DATABASE_URL environment variable is required in production.")
+    _database_url = "postgresql://postgres:admin@localhost:5432/attendance_db"
+
+_redis_url = os.getenv("REDIS_URL", "")
+if not _redis_url:
+    if _environment == "production":
+        raise RuntimeError("REDIS_URL environment variable is required in production.")
+    _redis_url = "redis://localhost:6379/0"
+
 class Settings:
     PROJECT_NAME: str = "AuraWork Enterprise HRMS Portal"
     API_V1_STR: str = "/api"
-    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "supersecretkeyforattendanceportal_change_in_production")
+    ENVIRONMENT: str = _environment
+    SECRET_KEY: str = _secret_key
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
-    
+
     # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://postgres:admin@localhost:5432/attendance_db")
+    DATABASE_URL: str = _database_url
+
+    # Redis (shared rate-limit storage + login-lockout counters)
+    REDIS_URL: str = _redis_url
 
     # CORS Origins
     ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://frontend:3000")
@@ -30,6 +64,10 @@ class Settings:
     RATE_LIMIT_AUTH: str = "20/minute"
     RATE_LIMIT_DEFAULT: str = "120/minute"
 
+    # Account lockout (Redis-backed failed-login counters, see app/core/utils.py)
+    FAILED_LOGIN_LOCKOUT_THRESHOLD: int = 5
+    FAILED_LOGIN_LOCKOUT_SECONDS: int = 15 * 60  # 15 minutes
+
     # AWS S3 Settings
     S3_BUCKET: str = os.getenv("S3_BUCKET", "aurawork-uploads-bucket")
     S3_ACCESS_KEY: str = os.getenv("S3_ACCESS_KEY", "")
@@ -43,6 +81,11 @@ class Settings:
     SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
     SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
     SMTP_FROM: str = os.getenv("SMTP_FROM", "noreply@company.com")
+
+    # Error tracking (optional — Sentry-protocol DSN, e.g. from a self-hosted
+    # GlitchTip instance; see docker-compose.observability.yml). Left blank
+    # by default so dev/test environments don't try to report anything.
+    SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
 
     @property
     def cors_origins(self) -> List[str]:

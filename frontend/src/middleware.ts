@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
+// NOTE: This middleware decodes the JWT payload (base64) purely to pick a
+// redirect target for UX — it does NOT verify the signature and is not a
+// security boundary. Every backend route independently re-authenticates the
+// cookie and enforces role checks server-side (see app/core/security.py),
+// so a forged/expired token here only affects which page a user is bounced
+// to, never what data or actions they can actually reach.
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const accessToken = request.cookies.get('access_token')?.value;
@@ -47,6 +53,8 @@ export function middleware(request: NextRequest) {
       } catch {
         // ignore and let load login page
       }
+    } else if (pathname === '/') {
+      return NextResponse.redirect(new URL('/login', request.url));
     }
   }
 

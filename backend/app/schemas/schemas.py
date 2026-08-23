@@ -1,7 +1,21 @@
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+import re
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 from datetime import datetime, date, time
 from typing import Optional, List, Any
 from uuid import UUID
+
+PASSWORD_MIN_LENGTH = 8
+
+def validate_password_strength(password: str) -> str:
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"Password must be at least {PASSWORD_MIN_LENGTH} characters long")
+    if not re.search(r"[a-z]", password):
+        raise ValueError("Password must contain at least one lowercase letter")
+    if not re.search(r"[A-Z]", password):
+        raise ValueError("Password must contain at least one uppercase letter")
+    if not re.search(r"\d", password):
+        raise ValueError("Password must contain at least one digit")
+    return password
 
 # Generic API Response Schemas
 class StandardResponse(BaseModel):
@@ -82,21 +96,28 @@ class UserBase(BaseModel):
     email: EmailStr
 
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=PASSWORD_MIN_LENGTH)
     role: str = Field(..., pattern="^(Admin|Employee)$")
     profile: EmployeeProfileCreate
 
+    _validate_password = field_validator("password")(validate_password_strength)
+
 class UserUpdatePassword(BaseModel):
     old_password: str = Field(..., min_length=1)
-    new_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=PASSWORD_MIN_LENGTH)
+
+    _validate_password = field_validator("new_password")(validate_password_strength)
 
 class UserResetPassword(BaseModel):
-    new_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=PASSWORD_MIN_LENGTH)
+
+    _validate_password = field_validator("new_password")(validate_password_strength)
 
 class UserOut(UserBase):
     id: UUID
     role: str
     is_active: bool
+    mfa_enabled: bool
     created_at: datetime
     profile: Optional[EmployeeProfileOut] = None
     model_config = ConfigDict(from_attributes=True)
@@ -118,6 +139,26 @@ class LoginRequest(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
+
+# MFA (TOTP) Schemas
+class MfaLoginChallenge(BaseModel):
+    mfa_required: bool = True
+    mfa_token: str
+    message: str = "MFA verification required"
+
+class MfaSetupResponse(BaseModel):
+    secret: str
+    qr_code_base64: str
+
+class MfaCodeRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=6, pattern="^[0-9]{6}$")
+
+class MfaVerifyRequest(BaseModel):
+    mfa_token: str
+    code: str = Field(..., min_length=6, max_length=6, pattern="^[0-9]{6}$")
+
+class MfaDisableRequest(BaseModel):
+    password: str = Field(..., min_length=1)
 
 # Break Session Schemas
 class BreakSessionBase(BaseModel):

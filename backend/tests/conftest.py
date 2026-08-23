@@ -1,3 +1,4 @@
+import fakeredis
 import pytest
 from datetime import time, date
 from fastapi.testclient import TestClient
@@ -9,6 +10,18 @@ from app.core.database import Base, get_db
 from app.core.security import get_password_hash, create_jwt_token
 from app.main import app
 from app.models.models import User, EmployeeProfile, Department, OfficeSetting
+
+# Tests run without a real Redis available (no Docker in most dev/CI setups
+# for the unit-test job). Swap the shared redis_client for an in-memory
+# fake so rate-limit lockout logic (app/core/utils.py) is exercised for
+# real, not just its Redis-unreachable fail-open path — those are different
+# code paths and only one of them is worth a security guarantee.
+@pytest.fixture(autouse=True)
+def fake_redis(monkeypatch):
+    fake = fakeredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr("app.core.limiter.redis_client", fake)
+    yield fake
+    fake.flushall()
 
 # SQLite in-memory configuration for fast isolated testing
 SQLALCHEMY_DATABASE_URL = "sqlite://"

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import RoleChecker, get_password_hash, get_current_user
-from app.core.utils import log_audit
+from app.core.utils import log_audit, validate_image_bytes
 from app.models.models import User, EmployeeProfile, Department
 from app.schemas.schemas import (
     UserOut, UserCreate, EmployeeProfileUpdate, DepartmentOut, DepartmentCreate, UserResetPassword, MessageResponse
@@ -17,6 +17,11 @@ from app.core.config import settings
 router = APIRouter(prefix="/employees", tags=["Employee Management"])
 
 admin_required = RoleChecker(["Admin"])
+
+# Both "" and "/" are registered for the collection routes below (get/create
+# employees) — see the matching comment in app/routers/leaves.py for why:
+# the Next.js rewrite strips a trailing slash before proxying here, so a
+# bare @router.get("/") alone would never actually match what arrives.
 
 # --- Department Endpoints ---
 
@@ -44,7 +49,8 @@ def create_department(
 
 # --- Employee Endpoints ---
 
-@router.get("/", response_model=List[UserOut])
+@router.get("", response_model=List[UserOut])
+@router.get("/", response_model=List[UserOut], include_in_schema=False)
 def get_employees(
     search: Optional[str] = None,
     department_id: Optional[int] = None,
@@ -88,7 +94,8 @@ def get_employee_by_id(
         raise HTTPException(status_code=404, detail="Employee not found")
     return user
 
-@router.post("/", response_model=UserOut)
+@router.post("", response_model=UserOut)
+@router.post("/", response_model=UserOut, include_in_schema=False)
 def create_employee(
     request: Request,
     emp_data: UserCreate,
@@ -228,9 +235,7 @@ def reset_employee_password(
     admin_user: User = Depends(admin_required)
 ):
     new_password = pass_data.new_password
-    if not new_password or len(new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long")
-        
+
     user = db.query(User).filter(User.id == employee_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -268,6 +273,13 @@ async def upload_employee_avatar(
     contents = await file.read()
     if len(contents) > settings.MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(status_code=400, detail="File size exceeds the 5 MB limit")
+
+    # Verify the bytes are actually a decodable image of an allowed format —
+    # extension and Content-Type are client-supplied and can be spoofed.
+    try:
+        validate_image_bytes(contents)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     unique_filename = f"{employee_id}_{uuid.uuid4().hex}{file_ext}"
 

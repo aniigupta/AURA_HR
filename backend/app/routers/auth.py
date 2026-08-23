@@ -1,48 +1,36 @@
+import base64
+import io
+import uuid
 from datetime import timedelta
+import pyotp
+import qrcode
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request, BackgroundTasks
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import (
-    verify_password, create_jwt_token, decode_jwt_token, get_current_user, get_password_hash
+    verify_password, create_jwt_token, create_mfa_challenge_token, decode_jwt_token, get_current_user, get_password_hash
 )
-from app.core.utils import log_audit, send_email_background
+from app.core.utils import log_audit, send_email_background, is_login_locked_out, record_failed_login, clear_failed_logins
+from app.core.limiter import limiter
 from app.models.models import User
-from app.schemas.schemas import LoginRequest, UserOut, UserUpdatePassword, ForgotPasswordRequest, MessageResponse
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+from app.schemas.schemas import (
+    LoginRequest, UserOut, UserUpdatePassword, ForgotPasswordRequest, MessageResponse,
+    MfaLoginChallenge, MfaSetupResponse, MfaCodeRequest, MfaVerifyRequest, MfaDisableRequest
+)
 
-limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-@router.post("/login")
-@limiter.limit(settings.RATE_LIMIT_LOGIN)
-def login(
-    request: Request,
-    response: Response,
-    login_data: LoginRequest,
-    db: Session = Depends(get_db)
-):
-    user = db.query(User).filter(User.email == login_data.email).first()
-    if not user or not verify_password(login_data.password, user.hashed_password):
-        log_audit(db, None, "LOGIN_FAILED", request.client.host if request.client else None, f"Email: {login_data.email}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect email or password"
-        )
-    
-    if not user.is_active:
-        log_audit(db, user.id, "LOGIN_INACTIVE", request.client.host if request.client else None, f"Inactive user: {user.email}")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inactive user. Contact your administrator."
-        )
-
-    # Generate tokens
+def _issue_session(response: Response, user: User) -> dict:
+    """
+    Sets the real httpOnly session cookies and builds the standard login
+    response body. Shared by the direct-login path (non-MFA accounts) and
+    the MFA verification path — both end the same way once the caller's
+    identity is fully established.
+    """
     access_token = create_jwt_token(subject=user.id, role=user.role, is_refresh=False)
     refresh_token = create_jwt_token(subject=user.id, role=user.role, is_refresh=True)
 
-    # Set HTTP Only Cookies
     response.set_cookie(
         key="access_token",
         value=access_token,
@@ -52,7 +40,7 @@ def login(
         samesite="lax",
         secure=settings.ENVIRONMENT == "production",
     )
-    
+
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
@@ -63,8 +51,9 @@ def login(
         secure=settings.ENVIRONMENT == "production",
     )
 
-    log_audit(db, user.id, "LOGIN_SUCCESS", request.client.host if request.client else None, f"Role: {user.role}")
-
+    # Tokens are only ever set as httpOnly cookies, never echoed back in the
+    # JSON body — that would defeat the purpose of httpOnly (JS-inaccessible)
+    # cookies by handing the raw token to anything that can read the response.
     return {
         "message": "Login successful",
         "user": {
@@ -74,10 +63,146 @@ def login(
             "first_name": user.profile.first_name if user.profile else "",
             "last_name": user.profile.last_name if user.profile else "",
             "profile_image_url": user.profile.profile_image_url if user.profile else None
-        },
-        "access_token": access_token,
-        "refresh_token": refresh_token
+        }
     }
+
+@router.post("/login")
+@limiter.limit(settings.RATE_LIMIT_LOGIN)
+def login(
+    request: Request,
+    response: Response,
+    login_data: LoginRequest,
+    db: Session = Depends(get_db)
+):
+    if is_login_locked_out(login_data.email):
+        log_audit(db, None, "LOGIN_LOCKED", request.client.host if request.client else None, f"Email: {login_data.email}")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed login attempts. Please try again in {settings.FAILED_LOGIN_LOCKOUT_SECONDS // 60} minutes."
+        )
+
+    user = db.query(User).filter(User.email == login_data.email).first()
+    if not user or not verify_password(login_data.password, user.hashed_password):
+        record_failed_login(login_data.email)
+        log_audit(db, None, "LOGIN_FAILED", request.client.host if request.client else None, f"Email: {login_data.email}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incorrect email or password"
+        )
+
+    if not user.is_active:
+        log_audit(db, user.id, "LOGIN_INACTIVE", request.client.host if request.client else None, f"Inactive user: {user.email}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive user. Contact your administrator."
+        )
+
+    clear_failed_logins(user.email)
+
+    # Admin accounts with MFA enabled don't get a session yet — password is
+    # only the first factor. Issue a short-lived, narrowly-scoped challenge
+    # token instead; the real session is issued by /mfa/verify.
+    if user.role == "Admin" and user.mfa_enabled:
+        mfa_token = create_mfa_challenge_token(user.id)
+        log_audit(db, user.id, "MFA_CHALLENGE_ISSUED", request.client.host if request.client else None)
+        return MfaLoginChallenge(mfa_token=mfa_token)
+
+    log_audit(db, user.id, "LOGIN_SUCCESS", request.client.host if request.client else None, f"Role: {user.role}")
+    return _issue_session(response, user)
+
+@router.post("/mfa/verify")
+@limiter.limit(settings.RATE_LIMIT_AUTH)
+def mfa_verify(
+    request: Request,
+    response: Response,
+    payload: MfaVerifyRequest,
+    db: Session = Depends(get_db)
+):
+    try:
+        decoded = decode_jwt_token(payload.mfa_token)
+    except HTTPException:
+        raise
+
+    if decoded.get("type") != "mfa_challenge":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired MFA session")
+
+    try:
+        user_uuid = uuid.UUID(decoded.get("sub"))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired MFA session")
+
+    user = db.query(User).filter(User.id == user_uuid).first()
+    if not user or not user.is_active or not user.mfa_enabled or not user.totp_secret:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired MFA session")
+
+    totp = pyotp.TOTP(user.totp_secret)
+    if not totp.verify(payload.code, valid_window=1):
+        log_audit(db, user.id, "MFA_VERIFY_FAILED", request.client.host if request.client else None)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid authentication code")
+
+    log_audit(db, user.id, "MFA_VERIFY_SUCCESS", request.client.host if request.client else None)
+    return _issue_session(response, user)
+
+@router.post("/mfa/setup", response_model=MfaSetupResponse)
+def mfa_setup(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Generates a new TOTP secret and returns it (as a QR code + manual-entry
+    string) for enrollment. Storing it here does NOT enable MFA yet — that
+    only happens once the user proves possession of the authenticator via
+    /mfa/enable, so an abandoned setup attempt can't lock anyone out.
+    """
+    secret = pyotp.random_base32()
+    current_user.totp_secret = secret
+    current_user.mfa_enabled = False
+    db.commit()
+
+    provisioning_uri = pyotp.TOTP(secret).provisioning_uri(
+        name=current_user.email, issuer_name="AuraWork Portal"
+    )
+    qr_img = qrcode.make(provisioning_uri)
+    buf = io.BytesIO()
+    qr_img.save(buf, format="PNG")
+    qr_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    return MfaSetupResponse(secret=secret, qr_code_base64=f"data:image/png;base64,{qr_b64}")
+
+@router.post("/mfa/enable", response_model=MessageResponse)
+def mfa_enable(
+    request: Request,
+    payload: MfaCodeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.totp_secret:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Run MFA setup first")
+
+    totp = pyotp.TOTP(current_user.totp_secret)
+    if not totp.verify(payload.code, valid_window=1):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid authentication code")
+
+    current_user.mfa_enabled = True
+    db.commit()
+    log_audit(db, current_user.id, "MFA_ENABLED", request.client.host if request.client else None)
+    return {"message": "MFA enabled successfully"}
+
+@router.post("/mfa/disable", response_model=MessageResponse)
+def mfa_disable(
+    request: Request,
+    payload: MfaDisableRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not verify_password(payload.password, current_user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect password")
+
+    current_user.mfa_enabled = False
+    current_user.totp_secret = None
+    db.commit()
+    log_audit(db, current_user.id, "MFA_DISABLED", request.client.host if request.client else None)
+    return {"message": "MFA disabled successfully"}
 
 @router.post("/refresh")
 @limiter.limit(settings.RATE_LIMIT_AUTH)
@@ -110,7 +235,6 @@ def refresh(
                 detail="Invalid refresh token"
             )
             
-        import uuid
         user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
         user = db.query(User).filter(User.id == user_uuid).first()
         if not user or not user.is_active:
@@ -132,7 +256,6 @@ def refresh(
         )
         
         return {
-            "access_token": access_token,
             "message": "Token refreshed successfully"
         }
     except HTTPException:

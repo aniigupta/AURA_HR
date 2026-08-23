@@ -28,20 +28,31 @@ interface User {
   email: string;
   role: "Admin" | "Employee";
   is_active: boolean;
+  mfa_enabled: boolean;
   profile?: UserProfile;
 }
 
 interface LoginResponse {
   user: User;
-  access_token: string;
-  refresh_token: string;
   message: string;
+}
+
+interface MfaChallengeResponse {
+  mfa_required: true;
+  mfa_token: string;
+  message: string;
+}
+
+interface LoginResult {
+  mfaRequired: boolean;
+  mfaToken?: string;
 }
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<LoginResult>;
+  verifyMfa: (mfaToken: string, code: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -112,22 +123,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [user, isLoading, pathname, router]);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string): Promise<LoginResult> => {
     setIsLoading(true);
     try {
-      const data = await apiFetch<LoginResponse>("/auth/login", {
+      const data = await apiFetch<LoginResponse | MfaChallengeResponse>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
       });
-      setUser(data.user);
-      
-      if (data.user.role === "Admin") {
+
+      if ("mfa_required" in data && data.mfa_required) {
+        // Password verified, but this Admin account has MFA enabled — no
+        // session yet. The caller (login page) collects a TOTP code and
+        // calls verifyMfa() to actually complete the login.
+        setIsLoading(false);
+        return { mfaRequired: true, mfaToken: data.mfa_token };
+      }
+
+      const { user: loggedInUser } = data as LoginResponse;
+      setUser(loggedInUser);
+
+      if (loggedInUser.role === "Admin") {
         router.push("/admin/dashboard");
       } else {
         router.push("/employee/dashboard");
       }
+      return { mfaRequired: false };
     } catch (err) {
       setUser(null);
+      setIsLoading(false);
+      throw err;
+    }
+  };
+
+  const verifyMfa = async (mfaToken: string, code: string) => {
+    setIsLoading(true);
+    try {
+      const data = await apiFetch<LoginResponse>("/auth/mfa/verify", {
+        method: "POST",
+        body: JSON.stringify({ mfa_token: mfaToken, code }),
+      });
+      setUser(data.user);
+      // MFA only ever applies to Admin accounts (see backend/app/routers/auth.py)
+      router.push("/admin/dashboard");
+    } catch (err) {
       setIsLoading(false);
       throw err;
     }
@@ -147,7 +185,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, isLoading, login, verifyMfa, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

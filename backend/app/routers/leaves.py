@@ -13,7 +13,15 @@ router = APIRouter(prefix="/leaves", tags=["Leave Management"])
 
 admin_required = RoleChecker(["Admin"])
 
-@router.get("/", response_model=List[LeaveRequestOut])
+# Both "" and "/" are registered for the collection routes below: the
+# frontend's Next.js rewrite (next.config.ts) strips a trailing slash from
+# /api/leaves/ before proxying (confirmed via a live e2e test — Next.js
+# 308-redirects it to /api/leaves regardless of what the frontend requests),
+# so the request that actually reaches this backend never has the trailing
+# slash a bare @router.get("/") alone would require.
+
+@router.get("", response_model=List[LeaveRequestOut])
+@router.get("/", response_model=List[LeaveRequestOut], include_in_schema=False)
 def get_leaves(
     status_filter: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -29,7 +37,8 @@ def get_leaves(
             
     return query.order_by(LeaveRequest.created_at.desc()).all()
 
-@router.post("/", response_model=LeaveRequestOut)
+@router.post("", response_model=LeaveRequestOut)
+@router.post("/", response_model=LeaveRequestOut, include_in_schema=False)
 def apply_leave(
     request: Request,
     leave_data: LeaveRequestCreate,

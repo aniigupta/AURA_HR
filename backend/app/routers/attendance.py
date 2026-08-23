@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_current_user, RoleChecker
 from app.core.utils import (
-    calculate_haversine_distance, is_wfh_active, log_audit, get_day_status_for_employee, get_safe_timezone
+    calculate_haversine_distance, is_wfh_active, log_audit, get_day_status_for_employee, get_safe_timezone,
+    validate_image_bytes
 )
 from app.models.models import User, Attendance, BreakSession, OfficeSetting, Holiday, AttendanceCorrectionRequest
 from app.schemas.schemas import AttendanceOut, ClockInRequest, AttendanceCorrectionCreate, AttendanceCorrectionReview, AttendanceCorrectionOut
@@ -106,10 +107,15 @@ def clock_in(
             if "," in base64_data:
                 _, base64_data = base64_data.split(",", 1)
             image_bytes = base64.b64decode(base64_data)
-            
+
             if len(image_bytes) > app_settings.MAX_UPLOAD_SIZE_BYTES:
                 raise HTTPException(status_code=400, detail="Selfie image exceeds maximum allowed size (5MB)")
-            
+
+            try:
+                validate_image_bytes(image_bytes)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid selfie image: {e}")
+
             selfies_dir = os.path.join(app_settings.UPLOAD_DIR, "selfies")
             os.makedirs(selfies_dir, exist_ok=True)
             

@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import Image from "next/image";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, getBackendUrl } from "@/utils/api";
+import { getPasswordStrengthError } from "@/utils/validation";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card } from "@/components/ui/card";
 import { Button, Input, Select, Badge, Skeleton, SearchInput } from "@/components/ui/atoms";
@@ -89,7 +90,7 @@ export default function EmployeesAdminPage() {
   // Queries
   const { data: employees = [], isLoading } = useQuery<EmployeeRecord[]>({
     queryKey: ["employees", search, selectedDept],
-    queryFn: () => apiFetch<EmployeeRecord[]>("/employees/", {
+    queryFn: () => apiFetch<EmployeeRecord[]>("/employees", {
       params: {
         search: search || undefined,
         department_id: selectedDept ? parseInt(selectedDept) : undefined,
@@ -104,7 +105,7 @@ export default function EmployeesAdminPage() {
 
   // Mutators
   const createMutation = useMutation({
-    mutationFn: (newEmp: unknown) => apiFetch("/employees/", {
+    mutationFn: (newEmp: unknown) => apiFetch("/employees", {
       method: "POST",
       body: JSON.stringify(newEmp)
     }),
@@ -194,6 +195,11 @@ export default function EmployeesAdminPage() {
       toast.error("Please fill in all mandatory fields.");
       return;
     }
+    const passwordError = getPasswordStrengthError(formPassword);
+    if (passwordError) {
+      toast.error(passwordError);
+      return;
+    }
 
     createMutation.mutate({
       email: formEmail,
@@ -268,8 +274,9 @@ export default function EmployeesAdminPage() {
 
   const handleResetSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formNewPass || formNewPass.length < 6) {
-      toast.error("Password must be at least 6 characters.");
+    const passwordError = getPasswordStrengthError(formNewPass || "");
+    if (passwordError) {
+      toast.error(passwordError);
       return;
     }
     if (!selectedEmployee) return;

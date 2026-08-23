@@ -9,6 +9,10 @@ build/
 dist/
 *.tsbuildinfo
 frontend/next-env.d.ts
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/coverage/
 
 # Python / Backend
 __pycache__/
@@ -62,6 +66,17 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+
+# TLS certificates
+nginx/certs/*.pem
+nginx/certs/*.crt
+nginx/certs/*.key
+nginx/certbot-letsencrypt/
+nginx/certbot-www/*
+!nginx/certbot-www/.gitkeep
+
+# Local Postgres backups (production backups belong off-VPS, not in git)
+/backups/
 
 # OS & Editor
 .DS_Store

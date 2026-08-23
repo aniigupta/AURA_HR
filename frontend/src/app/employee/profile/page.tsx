@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import Image from "next/image";
 import { useMutation } from "@tanstack/react-query";
 import { apiFetch, getBackendUrl } from "@/utils/api";
+import { getPasswordStrengthError } from "@/utils/validation";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, Input } from "@/components/ui/atoms";
 import { toast } from "@/components/ui/toast";
@@ -70,8 +71,9 @@ export default function EmployeeProfilePage() {
       toast.error("New passwords do not match.");
       return;
     }
-    if (newPassword.length < 6) {
-      toast.error("Password must be at least 6 characters.");
+    const passwordError = getPasswordStrengthError(newPassword);
+    if (passwordError) {
+      toast.error(passwordError);
       return;
     }
     changePasswordMutation.mutate({

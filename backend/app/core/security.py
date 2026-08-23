@@ -45,6 +45,22 @@ def create_jwt_token(
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
+def create_mfa_challenge_token(subject: Union[str, uuid.UUID]) -> str:
+    """
+    Short-lived, single-purpose token issued after password verification
+    succeeds for an MFA-enabled account, before the real session exists.
+    Distinct "type" from access/refresh means it's useless against any
+    endpoint guarded by get_current_user — it only unlocks POST /auth/mfa/verify.
+    """
+    now_utc = datetime.now(timezone.utc)
+    expire = now_utc + timedelta(minutes=5)
+    to_encode = {
+        "exp": int(expire.timestamp()),
+        "sub": str(subject),
+        "type": "mfa_challenge",
+    }
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
 def decode_jwt_token(token: str) -> dict:
     try:
         decoded_token = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])

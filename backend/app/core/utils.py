@@ -45,6 +45,30 @@ def is_wfh_active(profile: Optional[EmployeeProfile], check_date: date) -> bool:
         
     return True
 
+def validate_image_bytes(image_bytes: bytes, allowed_formats: frozenset = frozenset({"JPEG", "PNG", "WEBP"})) -> None:
+    """
+    Verify that raw bytes actually decode as an image of an allowed format.
+    File extensions and Content-Type headers are client-supplied and easily
+    spoofed, so uploads must be validated against their real content before
+    being written to disk/served.
+    Raises ValueError if the content is not a valid/allowed image.
+    """
+    import io
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img.verify()
+        # Image.verify() leaves the file object unusable for further access,
+        # so re-open to read the format after a successful integrity check.
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            fmt = (img.format or "").upper()
+    except (UnidentifiedImageError, OSError) as e:
+        raise ValueError("File is not a valid image") from e
+
+    if fmt not in allowed_formats:
+        raise ValueError(f"Unsupported image format: {fmt or 'unknown'}")
+
 def sanitize_audit_details(details: Optional[str]) -> Optional[str]:
     """Strip out passwords, tokens, or credentials before logging."""
     if not details:
@@ -72,6 +96,44 @@ def log_audit(db: Session, user_id: Optional[Any], action: str, ip_address: Opti
     except Exception as e:
         db.rollback()
         logger.warning(f"Failed to log audit action '{action}': {e}")
+
+def _failed_login_key(email: str) -> str:
+    return f"failed_login:{email.strip().lower()}"
+
+def is_login_locked_out(email: str) -> bool:
+    """
+    Check whether repeated failed logins have locked out this email.
+    Fails open (returns False) if Redis is unreachable — an infra outage on
+    the rate-limit store should never itself become a login outage.
+    """
+    from app.core.limiter import redis_client
+    from app.core.config import settings
+    try:
+        count = redis_client.get(_failed_login_key(email))
+        return count is not None and int(count) >= settings.FAILED_LOGIN_LOCKOUT_THRESHOLD
+    except Exception as e:
+        logger.warning(f"Login lockout check failed (Redis unavailable?): {e}")
+        return False
+
+def record_failed_login(email: str) -> None:
+    """Increment the failed-login counter for an email, with a rolling TTL."""
+    from app.core.limiter import redis_client
+    from app.core.config import settings
+    try:
+        key = _failed_login_key(email)
+        count = redis_client.incr(key)
+        if count == 1:
+            redis_client.expire(key, settings.FAILED_LOGIN_LOCKOUT_SECONDS)
+    except Exception as e:
+        logger.warning(f"Failed to record failed login attempt (Redis unavailable?): {e}")
+
+def clear_failed_logins(email: str) -> None:
+    """Reset the failed-login counter for an email after a successful login."""
+    from app.core.limiter import redis_client
+    try:
+        redis_client.delete(_failed_login_key(email))
+    except Exception as e:
+        logger.warning(f"Failed to clear failed login attempts (Redis unavailable?): {e}")
 
 def get_day_status_for_employee(db: Session, user_id: Any, check_date: date, profile: EmployeeProfile, settings: OfficeSetting) -> str:
     """
@@ -118,40 +180,49 @@ def get_safe_timezone(tz_name: Optional[str] = None) -> Any:
     except Exception:
         return timezone(timedelta(hours=5, minutes=30))
 
-def get_mail_config(settings: Any) -> Any:
-    from fastapi_mail import ConnectionConfig
-    return ConnectionConfig(
-        MAIL_USERNAME=settings.SMTP_USERNAME,
-        MAIL_PASSWORD=settings.SMTP_PASSWORD,
-        MAIL_PORT=settings.SMTP_PORT,
-        MAIL_SERVER=settings.SMTP_HOST,
-        MAIL_STARTTLS=False,
-        MAIL_SSL_TLS=False,
-        MAIL_FROM=settings.SMTP_FROM,
-        MAIL_FROM_NAME="AuraWork Portal",
-        USE_CREDENTIALS=bool(settings.SMTP_USERNAME),
-        VALIDATE_CERTS=False
-    )
+async def _send_email_async(subject: str, recipient: str, body: str) -> None:
+    """
+    Actually sends the email via aiosmtplib directly — no fastapi-mail
+    wrapper. That wrapper previously hard-pinned aiosmtplib<3.0, which meant
+    a known-vulnerable aiosmtplib 2.0.2 couldn't be upgraded without also
+    bumping fastapi-mail, which in turn pulled in an incompatible Starlette
+    major version and broke FastAPI's routing outright. Talking to
+    aiosmtplib directly removes that whole chain of constraints.
+    """
+    import aiosmtplib
+    from email.message import EmailMessage
+    from app.core.config import settings
+
+    message = EmailMessage()
+    message["From"] = settings.SMTP_FROM
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(body)
+
+    # Local dev mail catchers (e.g. mailhog on localhost) don't speak TLS.
+    # Any real SMTP host gets STARTTLS + certificate validation enabled —
+    # never silently disable cert checks against a real mail provider.
+    is_local_smtp = settings.SMTP_HOST in ("localhost", "127.0.0.1")
+    try:
+        await aiosmtplib.send(
+            message,
+            hostname=settings.SMTP_HOST,
+            port=settings.SMTP_PORT,
+            username=settings.SMTP_USERNAME or None,
+            password=settings.SMTP_PASSWORD or None,
+            start_tls=not is_local_smtp,
+            validate_certs=not is_local_smtp,
+        )
+    except Exception as e:
+        logger.error(f"Failed to send email to {recipient}: {e}")
 
 def send_email_background(background_tasks: Any, subject: str, recipient: str, body: str) -> None:
     from app.core.config import settings
-    from fastapi_mail import FastMail, MessageSchema, MessageType
 
     if not settings.SMTP_HOST or (settings.SMTP_HOST == "localhost" and not settings.SMTP_USERNAME):
         logger.info(f"Skipping SMTP email dispatch (localhost/unauthenticated). To: {recipient}, Subject: {subject}")
         return
 
-    try:
-        message = MessageSchema(
-            subject=subject,
-            recipients=[recipient],
-            body=body,
-            subtype=MessageType.plain
-        )
-        mail_conf = get_mail_config(settings)
-        fm = FastMail(mail_conf)
-        background_tasks.add_task(fm.send_message, message)
-    except Exception as e:
-        logger.error(f"Failed to register email background task: {str(e)}")
+    background_tasks.add_task(_send_email_async, subject, recipient, body)
 
 

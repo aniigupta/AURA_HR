@@ -21,6 +21,12 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
+    # MFA (TOTP). totp_secret is set as soon as setup begins but mfa_enabled
+    # only flips to True once the user proves possession by verifying a code
+    # (see /auth/mfa/enable) — a secret alone doesn't mean MFA is active.
+    totp_secret = Column(String, nullable=True)
+    mfa_enabled = Column(Boolean, default=False, nullable=False)
+
     # Relationships
     profile = relationship("EmployeeProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     attendances = relationship("Attendance", back_populates="user", cascade="all, delete-orphan")

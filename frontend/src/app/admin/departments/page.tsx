@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/utils/api";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Button, Badge, Input, Skeleton } from "@/components/ui/atoms";
@@ -16,6 +16,7 @@ interface Department {
 }
 
 export default function DepartmentsAdminPage() {
+  const queryClient = useQueryClient();
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [deptName, setDeptName] = useState("");
   const [deptDesc, setDeptDesc] = useState("");
@@ -25,13 +26,29 @@ export default function DepartmentsAdminPage() {
     queryFn: () => apiFetch<Department[]>("/employees/departments")
   });
 
+  const createDeptMutation = useMutation({
+    mutationFn: (payload: { name: string; description?: string }) =>
+      apiFetch("/employees/departments", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["adminDepartmentsList"] });
+      toast.success(`Department '${variables.name}' created successfully!`);
+      setIsAddOpen(false);
+      setDeptName("");
+      setDeptDesc("");
+    },
+    onError: (err: unknown) => {
+      const errorMsg = err instanceof Error ? err.message : "Failed to create department.";
+      toast.error(errorMsg);
+    },
+  });
+
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!deptName) return;
-    toast.success(`Department '${deptName}' created successfully!`);
-    setIsAddOpen(false);
-    setDeptName("");
-    setDeptDesc("");
+    createDeptMutation.mutate({ name: deptName, description: deptDesc || undefined });
   };
 
   return (
@@ -116,7 +133,9 @@ export default function DepartmentsAdminPage() {
           />
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
             <Button type="button" variant="ghost" size="sm" onClick={() => setIsAddOpen(false)}>Cancel</Button>
-            <Button type="submit" size="sm">Create Unit</Button>
+            <Button type="submit" size="sm" disabled={createDeptMutation.isPending}>
+              {createDeptMutation.isPending ? "Creating..." : "Create Unit"}
+            </Button>
           </div>
         </form>
       </Dialog>

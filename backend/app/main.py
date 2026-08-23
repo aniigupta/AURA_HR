@@ -5,18 +5,31 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError, HTTPException
 from sqlalchemy.exc import SQLAlchemyError
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.core.config import settings
 from app.core.database import engine, Base
+from app.core.limiter import limiter
 from app.routers import auth, employees, attendance, leaves, settings as office_settings, dashboard, reports
 from app.seed import seed_db
 
 logger = logging.getLogger("aurawork")
+
+# Error tracking (optional — no-ops if SENTRY_DSN isn't configured). Works
+# with any Sentry-protocol-compatible ingest, including a self-hosted
+# GlitchTip instance (see docker-compose.observability.yml).
+if settings.SENTRY_DSN:
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        environment=settings.ENVIRONMENT,
+        traces_sample_rate=0.1,
+    )
 
 # Ensure DB tables are created
 Base.metadata.create_all(bind=engine)
@@ -25,27 +38,44 @@ Base.metadata.create_all(bind=engine)
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs(os.path.join(settings.UPLOAD_DIR, "selfies"), exist_ok=True)
 
-# Initialize Rate Limiter
-limiter = Limiter(key_func=get_remote_address, default_limits=[settings.RATE_LIMIT_DEFAULT])
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Seed database and initialize resources
-    try:
-        seed_db()
-    except Exception as e:
-        logger.error(f"Failed to run startup database seeder: {e}")
+    # Startup: Seed database with demo data (development only — never auto-create
+    # default accounts in a real deployment)
+    if settings.ENVIRONMENT == "development":
+        try:
+            seed_db()
+        except Exception as e:
+            logger.error(f"Failed to run startup database seeder: {e}")
+    else:
+        logger.info("Skipping demo data seeding (ENVIRONMENT is not 'development').")
     yield
     # Shutdown logic if needed
 
 # Initialize FastAPI
+# redirect_slashes=False: Starlette's default trailing-slash redirect builds
+# the Location header from this process's own perceived host — behind the
+# nginx/Next.js proxy in front of this app, that's an internal-only address
+# (e.g. the Docker service name) a real browser can never reach. A live e2e
+# test caught exactly this: POST /api/leaves (missing the trailing slash the
+# route actually requires) 307-redirected straight to the backend's own
+# address instead of back through the proxy. Disabling the auto-redirect
+# turns any future path/route mismatch into a clean 404 instead of a
+# silently-broken cross-origin redirect.
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    lifespan=lifespan
+    lifespan=lifespan,
+    redirect_slashes=False,
 )
 
 app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+
+# Prometheus metrics at /metrics — never exposed publicly (nginx only proxies
+# /, /api/, and /health; see nginx/nginx.conf). Scraped internally by the
+# optional Prometheus service in docker-compose.observability.yml.
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 # Centralized Exception Handlers
 @app.exception_handler(HTTPException)
@@ -65,12 +95,16 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = exc.errors()
     first_error_msg = errors[0].get("msg", "Validation error") if errors else "Invalid request data"
+    # Pydantic v2 error dicts can carry a raw exception object in "ctx" (e.g.
+    # from a field_validator that raises ValueError) which json.dumps can't
+    # serialize on its own — route through jsonable_encoder like FastAPI's
+    # own default handler does.
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "success": False,
             "message": first_error_msg,
-            "detail": errors,
+            "detail": jsonable_encoder(errors),
             "errorCode": "VALIDATION_ERROR",
         },
     )

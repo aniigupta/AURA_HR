@@ -1,10 +1,10 @@
 import csv
 import io
 from datetime import date, datetime, timedelta
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.security import RoleChecker
 from app.models.models import User, Attendance, EmployeeProfile, OfficeSetting
@@ -22,16 +22,16 @@ admin_required = RoleChecker(["Admin"])
 
 def get_report_data(
     db: Session,
+    organization_id: Any,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     department_id: Optional[int] = None,
     status_filter: Optional[str] = None,
     employee_id: Optional[str] = None
 ) -> List[dict]:
-    from sqlalchemy.orm import joinedload
     query = db.query(Attendance).options(
         joinedload(Attendance.user).joinedload(User.profile).joinedload(EmployeeProfile.department)
-    )
+    ).filter(Attendance.organization_id == organization_id)
 
     if start_date:
         query = query.filter(Attendance.date >= start_date)
@@ -86,7 +86,7 @@ def get_reports_summary(
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
-    return get_report_data(db, start_date, end_date, department_id, status_filter, employee_id)
+    return get_report_data(db, admin_user.organization_id, start_date, end_date, department_id, status_filter, employee_id)
 
 @router.get("/export/csv")
 def export_csv(
@@ -98,7 +98,7 @@ def export_csv(
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
-    data = get_report_data(db, start_date, end_date, department_id, status_filter, employee_id)
+    data = get_report_data(db, admin_user.organization_id, start_date, end_date, department_id, status_filter, employee_id)
     
     output = io.StringIO()
     writer = csv.writer(output)
@@ -137,7 +137,7 @@ def export_excel(
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
-    data = get_report_data(db, start_date, end_date, department_id, status_filter, employee_id)
+    data = get_report_data(db, admin_user.organization_id, start_date, end_date, department_id, status_filter, employee_id)
     
     wb = Workbook()
     ws = wb.active
@@ -203,7 +203,7 @@ def export_pdf(
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
-    data = get_report_data(db, start_date, end_date, department_id, status_filter, employee_id)
+    data = get_report_data(db, admin_user.organization_id, start_date, end_date, department_id, status_filter, employee_id)
     
     pdf_buffer = io.BytesIO()
     
@@ -242,7 +242,8 @@ def export_pdf(
     )
 
     story = []
-    story.append(Paragraph("Workforce Attendance & Salary Summary Report (INR)", title_style))
+    org_name = admin_user.organization.name if admin_user.organization else "AuraWork"
+    story.append(Paragraph(f"{org_name} - Workforce Attendance & Salary Report (INR)", title_style))
     story.append(Spacer(1, 10))
     
     headers = [
@@ -300,11 +301,10 @@ def export_pdf(
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
-def get_payroll_summary_data(db: Session, start_date: date, end_date: date) -> List[dict]:
-    from sqlalchemy.orm import joinedload
-    settings = db.query(OfficeSetting).first()
+def get_payroll_summary_data(db: Session, organization_id: Any, start_date: date, end_date: date) -> List[dict]:
+    settings = db.query(OfficeSetting).filter(OfficeSetting.organization_id == organization_id).first()
     if not settings:
-        settings = OfficeSetting()
+        settings = OfficeSetting(organization_id=organization_id)
         db.add(settings)
         db.commit()
         db.refresh(settings)
@@ -312,15 +312,18 @@ def get_payroll_summary_data(db: Session, start_date: date, end_date: date) -> L
     employees = db.query(EmployeeProfile).options(
         joinedload(EmployeeProfile.department),
         joinedload(EmployeeProfile.user)
-    ).join(User).filter(User.role == "Employee", User.is_active == True).all()
+    ).join(User).filter(
+        User.organization_id == organization_id,
+        User.role == "Employee",
+        User.is_active == True
+    ).all()
 
-    # Pre-fetch all attendance records in the date range to avoid N+1 queries
     all_attendances = db.query(Attendance).filter(
+        Attendance.organization_id == organization_id,
         Attendance.date >= start_date,
         Attendance.date <= end_date
     ).all()
 
-    # Group attendances by user_id
     user_attendance_map: Dict[Any, Dict[date, Attendance]] = {}
     for att in all_attendances:
         if att.user_id not in user_attendance_map:
@@ -416,7 +419,7 @@ def get_payroll_report(
     today = date.today()
     s_date = start_date or today.replace(day=1)
     e_date = end_date or today
-    return get_payroll_summary_data(db, s_date, e_date)
+    return get_payroll_summary_data(db, admin_user.organization_id, s_date, e_date)
 
 @router.get("/export/payroll")
 def export_payroll_excel(
@@ -428,7 +431,7 @@ def export_payroll_excel(
     today = date.today()
     s_date = start_date or today.replace(day=1)
     e_date = end_date or today
-    data = get_payroll_summary_data(db, s_date, e_date)
+    data = get_payroll_summary_data(db, admin_user.organization_id, s_date, e_date)
     
     wb = Workbook()
     ws = wb.active
@@ -494,7 +497,7 @@ def export_payroll_pdf(
     today = date.today()
     s_date = start_date or today.replace(day=1)
     e_date = end_date or today
-    data = get_payroll_summary_data(db, s_date, e_date)
+    data = get_payroll_summary_data(db, admin_user.organization_id, s_date, e_date)
     
     pdf_buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -532,7 +535,8 @@ def export_payroll_pdf(
     )
 
     story = []
-    story.append(Paragraph(f"Corporate Employee Payroll & Salary Statement (INR ₹) ({s_date} to {e_date})", title_style))
+    org_name = admin_user.organization.name if admin_user.organization else "AuraWork"
+    story.append(Paragraph(f"{org_name} - Corporate Employee Payroll & Salary Statement (INR ₹)", title_style))
     story.append(Spacer(1, 10))
     
     headers = [

@@ -15,12 +15,22 @@ def get_admin_dashboard(
     current_user: User = Depends(RoleChecker(["Admin"]))
 ):
     today = date.today()
+    org_id = current_user.organization_id
     
-    # 1. Total active employees
-    total_employees = db.query(User).filter(User.role == "Employee", User.is_active == True).count()
+    # 1. Total active employees in this organization
+    total_employees = db.query(User).filter(
+        User.organization_id == org_id,
+        User.role == "Employee",
+        User.is_active == True
+    ).count()
     
-    # Get today's attendance records with profiles joined
-    today_attendances = db.query(Attendance).options(joinedload(Attendance.user).joinedload(User.profile)).filter(Attendance.date == today).all()
+    # Today's attendance records in this organization
+    today_attendances = db.query(Attendance).options(
+        joinedload(Attendance.user).joinedload(User.profile)
+    ).filter(
+        Attendance.organization_id == org_id,
+        Attendance.date == today
+    ).all()
     
     present_today = 0
     late_today = 0
@@ -40,8 +50,9 @@ def get_admin_dashboard(
         if att.status == "Half Day":
             half_day_today += 1
             
-    # Today's Leaves
+    # Today's Leaves in this organization
     on_leave_today = db.query(LeaveRequest).filter(
+        LeaveRequest.organization_id == org_id,
         LeaveRequest.status == "Approved",
         LeaveRequest.start_date <= today,
         LeaveRequest.end_date >= today
@@ -49,22 +60,25 @@ def get_admin_dashboard(
 
     absent_today = max(0, total_employees - present_today - on_leave_today)
     
-    # Average Working Hours (This Month)
+    # Average Working Hours (This Month) in this organization
     start_of_month = today.replace(day=1)
     avg_working_hours_query = db.query(func.avg(Attendance.working_hours)).filter(
+        Attendance.organization_id == org_id,
         Attendance.date >= start_of_month,
         Attendance.date <= today,
         Attendance.working_hours > 0
     ).scalar()
     avg_working_hours = round(float(avg_working_hours_query), 2) if avg_working_hours_query else 0.0
 
-    # Monthly Attendance Percentage
+    # Monthly Attendance Percentage in this organization
     total_attendance_records = db.query(Attendance).filter(
+        Attendance.organization_id == org_id,
         Attendance.date >= start_of_month,
         Attendance.date <= today
     ).count()
     
     present_records = db.query(Attendance).filter(
+        Attendance.organization_id == org_id,
         Attendance.date >= start_of_month,
         Attendance.date <= today,
         Attendance.status.in_(["Present", "Late", "Half Day", "Work From Home"])
@@ -74,9 +88,10 @@ def get_admin_dashboard(
     if total_attendance_records > 0:
         attendance_percentage = round((present_records / total_attendance_records) * 100, 1)
 
-    # 2. Daily Attendance Graph (Last 7 days)
+    # 2. Daily Attendance Graph (Last 7 days) in this organization
     seven_days_ago = today - timedelta(days=6)
     last_7_records = db.query(Attendance.date, Attendance.status, Attendance.is_wfh).filter(
+        Attendance.organization_id == org_id,
         Attendance.date >= seven_days_ago,
         Attendance.date <= today
     ).all()
@@ -99,7 +114,7 @@ def get_admin_dashboard(
             "wfh": w_count
         })
 
-    # 3. Monthly Attendance Graph (Last 6 Months)
+    # 3. Monthly Attendance Graph (Last 6 Months) in this organization
     monthly_graph = []
     for i in range(5, -1, -1):
         first_day_of_current_month = today.replace(day=1)
@@ -113,6 +128,7 @@ def get_admin_dashboard(
         month_label = target_month_start.strftime("%b %Y")
         
         m_present = db.query(Attendance).filter(
+            Attendance.organization_id == org_id,
             Attendance.date >= target_month_start,
             Attendance.date <= target_month_end,
             Attendance.status.in_(["Present", "Late", "Half Day", "Work From Home"])
@@ -123,7 +139,7 @@ def get_admin_dashboard(
             "present": m_present
         })
 
-    # 4. Action Center (Needs Attention)
+    # 4. Action Center (Needs Attention) in this organization
     needs_attention = []
     
     # A. Late employees today
@@ -144,7 +160,10 @@ def get_admin_dashboard(
 
     # B. Missing clock-outs yesterday
     yesterday = today - timedelta(days=1)
-    missing_clockouts = db.query(Attendance).options(joinedload(Attendance.user).joinedload(User.profile)).filter(
+    missing_clockouts = db.query(Attendance).options(
+        joinedload(Attendance.user).joinedload(User.profile)
+    ).filter(
+        Attendance.organization_id == org_id,
         Attendance.date == yesterday,
         Attendance.clock_out == None
     ).all()
@@ -163,8 +182,13 @@ def get_admin_dashboard(
             "action": "Remind"
         })
 
-    # C. Pending leave requests
-    pending_leave_requests = db.query(LeaveRequest).options(joinedload(LeaveRequest.user).joinedload(User.profile)).filter(LeaveRequest.status == "Pending").all()
+    # C. Pending leave requests in this organization
+    pending_leave_requests = db.query(LeaveRequest).options(
+        joinedload(LeaveRequest.user).joinedload(User.profile)
+    ).filter(
+        LeaveRequest.organization_id == org_id,
+        LeaveRequest.status == "Pending"
+    ).all()
     for lv in pending_leave_requests:
         prof = lv.user.profile if lv.user else None
         name = f"{prof.first_name} {prof.last_name}" if prof else (lv.user.email if lv.user else "Unknown")
@@ -179,8 +203,13 @@ def get_admin_dashboard(
             "action": "Approve"
         })
 
-    # D. Pending corrections
-    pending_corrs = db.query(AttendanceCorrectionRequest).options(joinedload(AttendanceCorrectionRequest.user).joinedload(User.profile)).filter(AttendanceCorrectionRequest.status == "Pending").all()
+    # D. Pending corrections in this organization
+    pending_corrs = db.query(AttendanceCorrectionRequest).options(
+        joinedload(AttendanceCorrectionRequest.user).joinedload(User.profile)
+    ).filter(
+        AttendanceCorrectionRequest.organization_id == org_id,
+        AttendanceCorrectionRequest.status == "Pending"
+    ).all()
     for corr in pending_corrs:
         prof = corr.user.profile if corr.user else None
         name = f"{prof.first_name} {prof.last_name}" if prof else (corr.user.email if corr.user else "Unknown")
@@ -195,11 +224,11 @@ def get_admin_dashboard(
             "action": "Review"
         })
 
-    # 5. Currently Working List
+    # 5. Currently Working List in this organization
     currently_working = []
     working_records = [att for att in today_attendances if att.clock_in is not None and att.clock_out is None]
     
-    settings = db.query(OfficeSetting).first()
+    settings = db.query(OfficeSetting).filter(OfficeSetting.organization_id == org_id).first()
     timezone_str = settings.timezone if settings else "Asia/Kolkata"
     office_tz = get_safe_timezone(timezone_str)
 
@@ -261,6 +290,7 @@ def get_employee_dashboard(
 
     # Today's attendance
     today_attendance = db.query(Attendance).filter(
+        Attendance.organization_id == current_user.organization_id,
         Attendance.user_id == current_user.id,
         Attendance.date == today
     ).first()
@@ -268,12 +298,14 @@ def get_employee_dashboard(
     # Calculate Monthly Attendance Percentage for this employee
     start_of_month = today.replace(day=1)
     total_possible_days = db.query(Attendance).filter(
+        Attendance.organization_id == current_user.organization_id,
         Attendance.user_id == current_user.id,
         Attendance.date >= start_of_month,
         Attendance.date <= today
     ).count()
     
     present_days = db.query(Attendance).filter(
+        Attendance.organization_id == current_user.organization_id,
         Attendance.user_id == current_user.id,
         Attendance.date >= start_of_month,
         Attendance.date <= today,
@@ -286,6 +318,7 @@ def get_employee_dashboard(
 
     # Average working hours this month
     avg_working = db.query(func.avg(Attendance.working_hours)).filter(
+        Attendance.organization_id == current_user.organization_id,
         Attendance.user_id == current_user.id,
         Attendance.date >= start_of_month,
         Attendance.date <= today,
@@ -319,4 +352,3 @@ def get_employee_dashboard(
             }
         }
     }
-

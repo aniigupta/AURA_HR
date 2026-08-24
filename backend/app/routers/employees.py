@@ -17,11 +17,6 @@ router = APIRouter(prefix="/employees", tags=["Employee Management"])
 
 admin_required = RoleChecker(["Admin"])
 
-# Both "" and "/" are registered for the collection routes below (get/create
-# employees) — see the matching comment in app/routers/leaves.py for why:
-# the Next.js rewrite strips a trailing slash before proxying here, so a
-# bare @router.get("/") alone would never actually match what arrives.
-
 # --- Department Endpoints ---
 
 @router.get("/departments", response_model=List[DepartmentOut])
@@ -29,7 +24,9 @@ def get_departments(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    return db.query(Department).order_by(Department.name.asc()).all()
+    return db.query(Department).filter(
+        Department.organization_id == current_user.organization_id
+    ).order_by(Department.name.asc()).all()
 
 @router.post("/departments", response_model=DepartmentOut)
 def create_department(
@@ -37,10 +34,18 @@ def create_department(
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
-    existing = db.query(Department).filter(Department.name == dept.name).first()
+    existing = db.query(Department).filter(
+        Department.organization_id == admin_user.organization_id,
+        Department.name == dept.name.strip()
+    ).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Department already exists")
-    new_dept = Department(name=dept.name, description=dept.description)
+        raise HTTPException(status_code=400, detail="Department already exists in your organization")
+
+    new_dept = Department(
+        organization_id=admin_user.organization_id,
+        name=dept.name.strip(),
+        description=dept.description
+    )
     db.add(new_dept)
     db.commit()
     db.refresh(new_dept)
@@ -60,7 +65,10 @@ def get_employees(
     if current_user.role != "Admin":
         raise HTTPException(status_code=403, detail="Employees are not allowed to view other employee list")
 
-    query = db.query(User).join(EmployeeProfile).filter(User.role == "Employee")
+    query = db.query(User).join(EmployeeProfile).filter(
+        User.organization_id == current_user.organization_id,
+        User.role == "Employee"
+    )
     
     if search:
         search_filter = f"%{search.strip()}%"
@@ -88,7 +96,10 @@ def get_employee_by_id(
     if current_user.role == "Employee" and current_user.id != employee_id:
         raise HTTPException(status_code=403, detail="You can only view your own profile")
         
-    user = db.query(User).filter(User.id == employee_id).first()
+    user = db.query(User).filter(
+        User.id == employee_id,
+        User.organization_id == current_user.organization_id
+    ).first()
     if not user:
         raise HTTPException(status_code=404, detail="Employee not found")
     return user
@@ -101,19 +112,42 @@ def create_employee(
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
-    # Verify unique email
-    existing_user = db.query(User).filter(User.email == emp_data.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email is already registered")
+    # Enforce Plan Employee Limits
+    current_employee_count = db.query(User).filter(
+        User.organization_id == admin_user.organization_id,
+        User.role == "Employee",
+        User.is_active == True
+    ).count()
 
-    # Verify unique employee ID
-    existing_profile = db.query(EmployeeProfile).filter(EmployeeProfile.employee_id == emp_data.profile.employee_id).first()
+    max_limit = admin_user.organization.max_employees if admin_user.organization else 25
+    if current_employee_count >= max_limit:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Employee limit reached for your '{admin_user.organization.plan}' plan ({max_limit} active employees). Please upgrade your subscription."
+        )
+
+    # Verify unique email within organization
+    email_clean = emp_data.email.strip().lower()
+    existing_user = db.query(User).filter(
+        User.organization_id == admin_user.organization_id,
+        User.email == email_clean
+    ).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email is already registered in your organization")
+
+    # Verify unique employee ID within organization
+    emp_id_clean = emp_data.profile.employee_id.strip()
+    existing_profile = db.query(EmployeeProfile).filter(
+        EmployeeProfile.organization_id == admin_user.organization_id,
+        EmployeeProfile.employee_id == emp_id_clean
+    ).first()
     if existing_profile:
-        raise HTTPException(status_code=400, detail="Employee ID is already registered")
+        raise HTTPException(status_code=400, detail="Employee ID is already registered in your organization")
 
     # Create User
     new_user = User(
-        email=emp_data.email,
+        organization_id=admin_user.organization_id,
+        email=email_clean,
         hashed_password=get_password_hash(emp_data.password),
         role=emp_data.role,
         is_active=True
@@ -123,10 +157,11 @@ def create_employee(
 
     # Create Profile
     new_profile = EmployeeProfile(
+        organization_id=admin_user.organization_id,
         user_id=new_user.id,
-        first_name=emp_data.profile.first_name,
-        last_name=emp_data.profile.last_name,
-        employee_id=emp_data.profile.employee_id,
+        first_name=emp_data.profile.first_name.strip(),
+        last_name=emp_data.profile.last_name.strip(),
+        employee_id=emp_id_clean,
         phone=emp_data.profile.phone,
         designation=emp_data.profile.designation,
         department_id=emp_data.profile.department_id,
@@ -145,7 +180,7 @@ def create_employee(
     db.commit()
     db.refresh(new_user)
     
-    log_audit(db, admin_user.id, "EMPLOYEE_CREATED", request.client.host if request.client else None, f"Email: {new_user.email}")
+    log_audit(db, admin_user.id, "EMPLOYEE_CREATED", request.client.host if request.client else None, f"Email: {new_user.email}", organization_id=admin_user.organization_id)
     return new_user
 
 @router.put("/{employee_id}", response_model=UserOut)
@@ -158,12 +193,10 @@ def update_employee(
 ):
     update_dict = update_data.model_dump(exclude_unset=True)
 
-    # Employees can only update limited fields of themselves, admin can update all
     if current_user.role == "Employee":
         if current_user.id != employee_id:
             raise HTTPException(status_code=403, detail="You cannot update other employee's profile")
         
-        # Enforce that employees cannot change leave balances, WFH, employee_id, or salary rates
         restricted_fields = [
             "leave_balance_casual", "leave_balance_sick", "leave_balance_paid",
             "hourly_rate", "base_salary",
@@ -173,7 +206,10 @@ def update_employee(
         for field in restricted_fields:
             update_dict.pop(field, None)
 
-    user = db.query(User).filter(User.id == employee_id).first()
+    user = db.query(User).filter(
+        User.id == employee_id,
+        User.organization_id == current_user.organization_id
+    ).first()
     if not user:
         raise HTTPException(status_code=404, detail="Employee not found")
 
@@ -181,14 +217,13 @@ def update_employee(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    # Update profile fields
     for field, value in update_dict.items():
         setattr(profile, field, value)
 
     db.commit()
     db.refresh(user)
     
-    log_audit(db, current_user.id, "EMPLOYEE_UPDATED", request.client.host if request.client else None, f"User ID: {employee_id}")
+    log_audit(db, current_user.id, "EMPLOYEE_UPDATED", request.client.host if request.client else None, f"User ID: {employee_id}", organization_id=current_user.organization_id)
     return user
 
 @router.delete("/{employee_id}", response_model=MessageResponse)
@@ -198,13 +233,16 @@ def delete_employee(
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
-    user = db.query(User).filter(User.id == employee_id).first()
+    user = db.query(User).filter(
+        User.id == employee_id,
+        User.organization_id == admin_user.organization_id
+    ).first()
     if not user:
         raise HTTPException(status_code=404, detail="Employee not found")
         
     db.delete(user)
     db.commit()
-    log_audit(db, admin_user.id, "EMPLOYEE_DELETED", request.client.host if request.client else None, f"User ID: {employee_id}")
+    log_audit(db, admin_user.id, "EMPLOYEE_DELETED", request.client.host if request.client else None, f"User ID: {employee_id}", organization_id=admin_user.organization_id)
     return {"message": "Employee deleted successfully"}
 
 @router.patch("/{employee_id}/toggle-status", response_model=MessageResponse)
@@ -214,7 +252,10 @@ def toggle_employee_status(
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
-    user = db.query(User).filter(User.id == employee_id).first()
+    user = db.query(User).filter(
+        User.id == employee_id,
+        User.organization_id == admin_user.organization_id
+    ).first()
     if not user:
         raise HTTPException(status_code=404, detail="Employee not found")
 
@@ -222,7 +263,7 @@ def toggle_employee_status(
     db.commit()
     
     action = "EMPLOYEE_ACTIVATED" if user.is_active else "EMPLOYEE_DEACTIVATED"
-    log_audit(db, admin_user.id, action, request.client.host if request.client else None, f"User ID: {employee_id}")
+    log_audit(db, admin_user.id, action, request.client.host if request.client else None, f"User ID: {employee_id}", organization_id=admin_user.organization_id)
     return {"message": f"Employee status updated. Active: {user.is_active}"}
 
 @router.post("/{employee_id}/reset-password", response_model=MessageResponse)
@@ -233,16 +274,17 @@ def reset_employee_password(
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
-    new_password = pass_data.new_password
-
-    user = db.query(User).filter(User.id == employee_id).first()
+    user = db.query(User).filter(
+        User.id == employee_id,
+        User.organization_id == admin_user.organization_id
+    ).first()
     if not user:
         raise HTTPException(status_code=404, detail="Employee not found")
         
-    user.hashed_password = get_password_hash(new_password)
+    user.hashed_password = get_password_hash(pass_data.new_password)
     db.commit()
     
-    log_audit(db, admin_user.id, "EMPLOYEE_PASSWORD_RESET", request.client.host if request.client else None, f"User ID: {employee_id}")
+    log_audit(db, admin_user.id, "EMPLOYEE_PASSWORD_RESET", request.client.host if request.client else None, f"User ID: {employee_id}", organization_id=admin_user.organization_id)
     return {"message": "Employee password has been reset successfully"}
 
 @router.post("/{employee_id}/upload-avatar")
@@ -256,11 +298,13 @@ async def upload_employee_avatar(
     if current_user.role == "Employee" and current_user.id != employee_id:
         raise HTTPException(status_code=403, detail="You cannot upload avatars for other employees")
         
-    user = db.query(User).filter(User.id == employee_id).first()
+    user = db.query(User).filter(
+        User.id == employee_id,
+        User.organization_id == current_user.organization_id
+    ).first()
     if not user or not user.profile:
         raise HTTPException(status_code=404, detail="Employee profile not found")
 
-    # Validate file extension and MIME type
     file_ext = os.path.splitext(file.filename or "")[1].lower()
     if file_ext not in settings.ALLOWED_UPLOAD_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Only JPG, JPEG, PNG, and WebP files are allowed")
@@ -268,13 +312,10 @@ async def upload_employee_avatar(
     if file.content_type not in settings.ALLOWED_UPLOAD_MIME_TYPES:
         raise HTTPException(status_code=400, detail="Invalid image content type")
 
-    # Read and validate file size (max 5 MB)
     contents = await file.read()
     if len(contents) > settings.MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(status_code=400, detail="File size exceeds the 5 MB limit")
 
-    # Verify the bytes are actually a decodable image of an allowed format —
-    # extension and Content-Type are client-supplied and can be spoofed.
     try:
         validate_image_bytes(contents)
     except ValueError as e:
@@ -310,17 +351,14 @@ async def upload_employee_avatar(
         except ClientError as e:
             raise HTTPException(status_code=500, detail=f"S3 Upload failed: {str(e)}")
     else:
-        # Local fallback
         os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
         file_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
         with open(file_path, "wb") as buffer:
             buffer.write(contents)
         image_url = f"/api/static/{unique_filename}"
 
-    # Update profile image url
     user.profile.profile_image_url = image_url
     db.commit()
     
-    log_audit(db, current_user.id, "AVATAR_UPLOADED", request.client.host if request.client else None, f"User ID: {employee_id}")
+    log_audit(db, current_user.id, "AVATAR_UPLOADED", request.client.host if request.client else None, f"User ID: {employee_id}", organization_id=current_user.organization_id)
     return {"profile_image_url": user.profile.profile_image_url}
-

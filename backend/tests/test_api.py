@@ -574,10 +574,8 @@ def test_employee_dashboard_reflects_after_clock_in(employee_client):
 # --- Office Settings Tests ---
 
 def test_office_settings_get_creates_default_then_admin_can_update(admin_client, employee_client):
-    # First read creates the single-row default if it doesn't exist yet
     get_res = employee_client.get("/api/settings/office")
     assert get_res.status_code == 200
-    assert get_res.json()["id"] == 1
 
     forbidden_res = employee_client.put("/api/settings/office", json={"allowed_radius": 200.0})
     assert forbidden_res.status_code == 403
@@ -622,4 +620,95 @@ def test_reports_reflect_attendance_data(admin_client, employee_client):
     assert res.status_code == 200
     data = res.json()
     assert any(row["employee_id"] == "EMP001" for row in data)
+
+# --- Multi-Tenant SaaS Tests ---
+
+def test_multi_tenant_company_registration(client, db):
+    payload = {
+        "company_name": "Zenith Cloud Solutions",
+        "company_slug": "zenith-cloud",
+        "admin_name": "Vikram Malhotra",
+        "admin_email": "vikram@zenithcloud.com",
+        "admin_password": "SecurePassword123",
+        "admin_phone": "+91 98111 22233",
+        "designation": "Chief Technology Officer",
+        "latitude": 19.0760,
+        "longitude": 72.8777,
+        "allowed_radius": 200.0
+    }
+
+    res = client.post("/api/auth/register-company", json=payload)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["message"] == "Login successful"
+    assert body["user"]["email"] == "vikram@zenithcloud.com"
+    assert body["user"]["organization_name"] == "Zenith Cloud Solutions"
+    assert body["user"]["organization_slug"] == "zenith-cloud"
+    assert body["user"]["role"] == "Admin"
+    assert "access_token" in res.cookies
+
+    # Duplicate slug registration should fail
+    dup_res = client.post("/api/auth/register-company", json=payload)
+    assert dup_res.status_code == 400
+    assert "already registered" in dup_res.json()["detail"]
+
+def test_multi_tenant_data_isolation(client, db):
+    # 1. Register Company A
+    reg_a = client.post("/api/auth/register-company", json={
+        "company_name": "Alpha Corp",
+        "company_slug": "alpha-corp",
+        "admin_name": "Admin Alpha",
+        "admin_email": "admin@alpha.com",
+        "admin_password": "AlphaPassword123"
+    })
+    assert reg_a.status_code == 200
+    token_a = reg_a.cookies["access_token"]
+
+    # 2. Register Company B
+    reg_b = client.post("/api/auth/register-company", json={
+        "company_name": "Beta Industries",
+        "company_slug": "beta-ind",
+        "admin_name": "Admin Beta",
+        "admin_email": "admin@beta.com",
+        "admin_password": "BetaPassword123"
+    })
+    assert reg_b.status_code == 200
+    token_b = reg_b.cookies["access_token"]
+
+    # 3. Create employee in Company A
+    client.cookies.set("access_token", token_a)
+    create_emp_res = client.post("/api/employees/", json={
+        "email": "dev@alpha.com",
+        "password": "DevPassword123",
+        "role": "Employee",
+        "profile": {
+            "first_name": "Alpha",
+            "last_name": "Dev",
+            "employee_id": "ALP001"
+        }
+    })
+    assert create_emp_res.status_code == 200
+
+    # 4. Company A Admin sees the new employee
+    emp_list_a = client.get("/api/employees/").json()
+    assert any(e["email"] == "dev@alpha.com" for e in emp_list_a)
+
+    # 5. Switch to Company B Admin - must NOT see Company A's employee
+    client.cookies.set("access_token", token_b)
+    emp_list_b = client.get("/api/employees/").json()
+    assert not any(e["email"] == "dev@alpha.com" for e in emp_list_b)
+
+    # 6. Company B can create employee with SAME employee_id "ALP001" without collision!
+    create_b_emp = client.post("/api/employees/", json={
+        "email": "dev@beta.com",
+        "password": "DevPassword123",
+        "role": "Employee",
+        "profile": {
+            "first_name": "Beta",
+            "last_name": "Dev",
+            "employee_id": "ALP001"
+        }
+    })
+    assert create_b_emp.status_code == 200
+
 

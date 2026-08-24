@@ -9,13 +9,8 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base, get_db
 from app.core.security import get_password_hash, create_jwt_token
 from app.main import app
-from app.models.models import User, EmployeeProfile, Department, OfficeSetting
+from app.models.models import Organization, User, EmployeeProfile, Department, OfficeSetting
 
-# Tests run without a real Redis available (no Docker in most dev/CI setups
-# for the unit-test job). Swap the shared redis_client for an in-memory
-# fake so rate-limit lockout logic (app/core/utils.py) is exercised for
-# real, not just its Redis-unreachable fail-open path — those are different
-# code paths and only one of them is worth a security guarantee.
 @pytest.fixture(autouse=True)
 def fake_redis(monkeypatch):
     fake = fakeredis.FakeRedis(decode_responses=True)
@@ -35,12 +30,10 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 
 @pytest.fixture(scope="function")
 def db():
-    # Create tables
     Base.metadata.create_all(bind=engine)
     db_session = TestingSessionLocal()
     
     try:
-        # Seed required config data
         seed_test_data(db_session)
         yield db_session
     finally:
@@ -71,7 +64,7 @@ def admin_client(db):
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as test_client:
         admin = db.query(User).filter(User.email == "test_admin@company.com").first()
-        token = create_jwt_token(subject=admin.id, role="Admin", is_refresh=False)
+        token = create_jwt_token(subject=admin.id, role="Admin", organization_id=admin.organization_id, is_refresh=False)
         test_client.cookies.set("access_token", token)
         yield test_client
     app.dependency_overrides.clear()
@@ -87,14 +80,26 @@ def employee_client(db):
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as test_client:
         employee = db.query(User).filter(User.email == "test_employee@company.com").first()
-        token = create_jwt_token(subject=employee.id, role="Employee", is_refresh=False)
+        token = create_jwt_token(subject=employee.id, role="Employee", organization_id=employee.organization_id, is_refresh=False)
         test_client.cookies.set("access_token", token)
         yield test_client
     app.dependency_overrides.clear()
 
 def seed_test_data(db_session):
+    # Create Default Test Organization
+    org = Organization(
+        name="Test Company Inc",
+        slug="test-company",
+        plan="Starter",
+        max_employees=25,
+        is_active=True
+    )
+    db_session.add(org)
+    db_session.flush()
+
     # Create Office Settings (IST +5.5 hours)
     settings = OfficeSetting(
+        organization_id=org.id,
         latitude=28.3971956,
         longitude=77.3131177,
         allowed_radius=100.0,
@@ -108,13 +113,14 @@ def seed_test_data(db_session):
     db_session.add(settings)
 
     # Create Departments
-    eng_dept = Department(name="Engineering", description="Engineering Dept")
-    hr_dept = Department(name="HR", description="HR Dept")
+    eng_dept = Department(organization_id=org.id, name="Engineering", description="Engineering Dept")
+    hr_dept = Department(organization_id=org.id, name="HR", description="HR Dept")
     db_session.add_all([eng_dept, hr_dept])
     db_session.flush()
 
     # Create Admin
     admin_user = User(
+        organization_id=org.id,
         email="test_admin@company.com",
         hashed_password=get_password_hash("adminpassword"),
         role="Admin",
@@ -124,6 +130,7 @@ def seed_test_data(db_session):
     db_session.flush()
 
     admin_profile = EmployeeProfile(
+        organization_id=org.id,
         user_id=admin_user.id,
         first_name="Test",
         last_name="Admin",
@@ -137,6 +144,7 @@ def seed_test_data(db_session):
 
     # Create Employee
     emp_user = User(
+        organization_id=org.id,
         email="test_employee@company.com",
         hashed_password=get_password_hash("employeepassword"),
         role="Employee",
@@ -146,6 +154,7 @@ def seed_test_data(db_session):
     db_session.flush()
 
     emp_profile = EmployeeProfile(
+        organization_id=org.id,
         user_id=emp_user.id,
         first_name="Test",
         last_name="Employee",

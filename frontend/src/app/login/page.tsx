@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { Button, Input } from "@/components/ui/atoms";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -264,6 +265,18 @@ export default function LoginPage() {
                 </form>
               </CardContent>
             </>
+          )}
+
+          {/* Register New Tenant / Company Link */}
+          {!isForgot && !mfaToken && (
+            <div className="mt-3 pt-3 border-t border-slate-100 text-center">
+              <p className="text-xs text-slate-500">
+                New Organization?{" "}
+                <Link href="/register" className="text-indigo-600 font-semibold hover:underline">
+                  Create Company Workspace
+                </Link>
+              </p>
+            </div>
           )}
         </Card>
       </div>

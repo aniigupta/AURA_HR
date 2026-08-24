@@ -26,6 +26,7 @@ def get_password_hash(password: str) -> str:
 def create_jwt_token(
     subject: Union[str, uuid.UUID],
     role: str,
+    organization_id: Optional[Union[str, uuid.UUID]] = None,
     expires_delta: Optional[timedelta] = None,
     is_refresh: bool = False
 ) -> str:
@@ -42,16 +43,13 @@ def create_jwt_token(
         "role": role,
         "type": "refresh" if is_refresh else "access"
     }
+    if organization_id:
+        to_encode["org_id"] = str(organization_id)
+
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
-def create_mfa_challenge_token(subject: Union[str, uuid.UUID]) -> str:
-    """
-    Short-lived, single-purpose token issued after password verification
-    succeeds for an MFA-enabled account, before the real session exists.
-    Distinct "type" from access/refresh means it's useless against any
-    endpoint guarded by get_current_user — it only unlocks POST /auth/mfa/verify.
-    """
+def create_mfa_challenge_token(subject: Union[str, uuid.UUID], organization_id: Optional[Union[str, uuid.UUID]] = None) -> str:
     now_utc = datetime.now(timezone.utc)
     expire = now_utc + timedelta(minutes=5)
     to_encode = {
@@ -59,6 +57,8 @@ def create_mfa_challenge_token(subject: Union[str, uuid.UUID]) -> str:
         "sub": str(subject),
         "type": "mfa_challenge",
     }
+    if organization_id:
+        to_encode["org_id"] = str(organization_id)
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 def decode_jwt_token(token: str) -> dict:
@@ -78,7 +78,7 @@ def decode_jwt_token(token: str) -> dict:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-# Dependency to get current user
+# Dependency to get current user with tenant validation
 def get_current_user(
     request: Request,
     db: Session = Depends(get_db)
@@ -86,7 +86,7 @@ def get_current_user(
     # First look in HTTP Only cookies
     token = request.cookies.get("access_token")
     
-    # Fallback to Authorization Header if cookies are empty (helps testing and API versatility)
+    # Fallback to Authorization Header if cookies are empty
     if not token:
         authorization: Optional[str] = request.headers.get("Authorization")
         if authorization and authorization.startswith("Bearer "):
@@ -130,6 +130,11 @@ def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is inactive"
         )
+    if user.organization and not user.organization.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization account is suspended or inactive"
+        )
     return user
 
 # Role enforcement dependencies
@@ -144,4 +149,3 @@ class RoleChecker:
                 detail="Operation not permitted for this role"
             )
         return current_user
-

@@ -13,13 +13,6 @@ router = APIRouter(prefix="/leaves", tags=["Leave Management"])
 
 admin_required = RoleChecker(["Admin"])
 
-# Both "" and "/" are registered for the collection routes below: the
-# frontend's Next.js rewrite (next.config.ts) strips a trailing slash from
-# /api/leaves/ before proxying (confirmed via a live e2e test — Next.js
-# 308-redirects it to /api/leaves regardless of what the frontend requests),
-# so the request that actually reaches this backend never has the trailing
-# slash a bare @router.get("/") alone would require.
-
 @router.get("", response_model=List[LeaveRequestOut])
 @router.get("/", response_model=List[LeaveRequestOut], include_in_schema=False)
 def get_leaves(
@@ -27,7 +20,7 @@ def get_leaves(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    query = db.query(LeaveRequest)
+    query = db.query(LeaveRequest).filter(LeaveRequest.organization_id == current_user.organization_id)
     
     if current_user.role == "Employee":
         query = query.filter(LeaveRequest.user_id == current_user.id)
@@ -66,6 +59,7 @@ def apply_leave(
 
     # Double-spend validation: account for existing Pending leave requests of the same type
     pending_leaves = db.query(LeaveRequest).filter(
+        LeaveRequest.organization_id == current_user.organization_id,
         LeaveRequest.user_id == current_user.id,
         LeaveRequest.status == "Pending",
         LeaveRequest.leave_type == leave_data.leave_type
@@ -82,6 +76,7 @@ def apply_leave(
 
     # Check for overlapping leave requests
     overlapping = db.query(LeaveRequest).filter(
+        LeaveRequest.organization_id == current_user.organization_id,
         LeaveRequest.user_id == current_user.id,
         LeaveRequest.status.in_(["Pending", "Approved"]),
         LeaveRequest.start_date <= leave_data.end_date,
@@ -92,6 +87,7 @@ def apply_leave(
         raise HTTPException(status_code=400, detail="You already have a pending or approved leave request for these dates")
 
     new_leave = LeaveRequest(
+        organization_id=current_user.organization_id,
         user_id=current_user.id,
         leave_type=leave_data.leave_type,
         start_date=leave_data.start_date,
@@ -104,20 +100,24 @@ def apply_leave(
     db.commit()
     db.refresh(new_leave)
 
-    log_audit(db, current_user.id, "LEAVE_APPLIED", request.client.host if request.client else None, f"Type: {leave_data.leave_type}, Days: {leave_days}")
+    log_audit(db, current_user.id, "LEAVE_APPLIED", request.client.host if request.client else None, f"Type: {leave_data.leave_type}, Days: {leave_days}", organization_id=current_user.organization_id)
 
-    # Send email notification to Admin in background
-    admins = db.query(User).filter(User.role == "Admin").all()
+    # Send email notification to Organization Admins in background
+    admins = db.query(User).filter(
+        User.organization_id == current_user.organization_id,
+        User.role == "Admin"
+    ).all()
     emp_name = f"{profile.first_name} {profile.last_name}" if profile else current_user.email
-    subject = f"AuraWork Portal - Leave Application Submitted ({emp_name})"
+    org_name = current_user.organization.name if current_user.organization else "AuraWork"
+    subject = f"{org_name} - Leave Application Submitted ({emp_name})"
     body = (
         f"Hello Admin,\n\n"
         f"Employee {emp_name} has applied for a {leave_data.leave_type} Leave.\n"
         f"Duration: {leave_data.start_date} to {leave_data.end_date}\n"
         f"Reason: {leave_data.reason}\n\n"
-        f"Please log in to the AuraWork Admin Portal to review this request.\n\n"
+        f"Please log in to the {org_name} Admin Portal to review this request.\n\n"
         f"Regards,\n"
-        f"AuraWork Notification System"
+        f"{org_name} Notification System"
     )
     for admin in admins:
         send_email_background(background_tasks, subject, admin.email, body)
@@ -138,7 +138,10 @@ def review_leave(
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid leave ID format")
 
-    leave = db.query(LeaveRequest).filter(LeaveRequest.id == uuid_leave_id).first()
+    leave = db.query(LeaveRequest).filter(
+        LeaveRequest.id == uuid_leave_id,
+        LeaveRequest.organization_id == admin_user.organization_id
+    ).first()
     if not leave:
         raise HTTPException(status_code=404, detail="Leave request not found")
 
@@ -147,7 +150,10 @@ def review_leave(
 
     # If approved, deduct from balances
     if review_data.status == "Approved":
-        profile = db.query(EmployeeProfile).filter(EmployeeProfile.user_id == leave.user_id).first()
+        profile = db.query(EmployeeProfile).filter(
+            EmployeeProfile.user_id == leave.user_id,
+            EmployeeProfile.organization_id == admin_user.organization_id
+        ).first()
         if profile:
             leave_days = (leave.end_date - leave.start_date).days + 1
             if leave.leave_type == "Casual":
@@ -171,13 +177,17 @@ def review_leave(
     db.refresh(leave)
 
     action = "LEAVE_APPROVED" if review_data.status == "Approved" else "LEAVE_REJECTED"
-    log_audit(db, admin_user.id, action, request.client.host if request.client else None, f"Leave ID: {leave_id}, User: {leave.user_id}")
+    log_audit(db, admin_user.id, action, request.client.host if request.client else None, f"Leave ID: {leave_id}, User: {leave.user_id}", organization_id=admin_user.organization_id)
 
     # Send email notification to Employee in background
-    employee = db.query(User).filter(User.id == leave.user_id).first()
+    employee = db.query(User).filter(
+        User.id == leave.user_id,
+        User.organization_id == admin_user.organization_id
+    ).first()
     if employee:
         emp_name = f"{employee.profile.first_name} {employee.profile.last_name}" if employee.profile else employee.email
-        subject = f"AuraWork Portal - Leave Request Updated ({review_data.status})"
+        org_name = admin_user.organization.name if admin_user.organization else "AuraWork"
+        subject = f"{org_name} - Leave Request Updated ({review_data.status})"
         body = (
             f"Hello {emp_name},\n\n"
             f"Your leave request has been reviewed by your administrator.\n\n"
@@ -187,9 +197,8 @@ def review_leave(
             f"Status: {review_data.status}\n"
             f"Comments: {review_data.comment or 'None'}\n\n"
             f"Regards,\n"
-            f"AuraWork Notification System"
+            f"{org_name} Notification System"
         )
         send_email_background(background_tasks, subject, employee.email, body)
     
     return leave
-

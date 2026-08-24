@@ -57,7 +57,7 @@ def test_get_day_status_for_employee(db):
     assert status_sat == "Weekend"
 
     # 3. Test Holiday status
-    new_holiday = Holiday(name="Test Holiday", date=date(2026, 8, 15), description="Independence Day")
+    new_holiday = Holiday(organization_id=profile.organization_id, name="Test Holiday", date=date(2026, 8, 15), description="Independence Day")
     db.add(new_holiday)
     db.commit()
     

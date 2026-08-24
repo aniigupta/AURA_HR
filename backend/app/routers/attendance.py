@@ -26,6 +26,7 @@ def get_today_attendance(
 ):
     today = date.today()
     attendance = db.query(Attendance).filter(
+        Attendance.organization_id == current_user.organization_id,
         Attendance.user_id == current_user.id,
         Attendance.date == today
     ).first()
@@ -40,7 +41,7 @@ def get_attendance_history(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    query = db.query(Attendance)
+    query = db.query(Attendance).filter(Attendance.organization_id == current_user.organization_id)
 
     if current_user.role == "Employee":
         query = query.filter(Attendance.user_id == current_user.id)
@@ -73,6 +74,7 @@ def clock_in(
 
     # Prevent duplicate clock-in
     existing = db.query(Attendance).filter(
+        Attendance.organization_id == current_user.organization_id,
         Attendance.user_id == current_user.id,
         Attendance.date == today
     ).first()
@@ -83,10 +85,10 @@ def clock_in(
             detail="You have already clocked in for today"
         )
 
-    # Fetch Office Settings
-    settings = db.query(OfficeSetting).first()
+    # Fetch Tenant Office Settings
+    settings = db.query(OfficeSetting).filter(OfficeSetting.organization_id == current_user.organization_id).first()
     if not settings:
-        settings = OfficeSetting()
+        settings = OfficeSetting(organization_id=current_user.organization_id)
         db.add(settings)
         db.commit()
         db.refresh(settings)
@@ -146,7 +148,7 @@ def clock_in(
             settings.longitude
         )
         if distance > settings.allowed_radius:
-            log_audit(db, current_user.id, "CLOCK_IN_FAILED_OUTSIDE_RADIUS", request.client.host if request.client else None, f"Distance: {distance:.2f}m")
+            log_audit(db, current_user.id, "CLOCK_IN_FAILED_OUTSIDE_RADIUS", request.client.host if request.client else None, f"Distance: {distance:.2f}m", organization_id=current_user.organization_id)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"You are outside office location. Distance: {distance:.1f} meters."
@@ -174,6 +176,7 @@ def clock_in(
         status_str = "Present"
 
     new_attendance = Attendance(
+        organization_id=current_user.organization_id,
         user_id=current_user.id,
         date=today,
         clock_in=now_utc,
@@ -192,7 +195,7 @@ def clock_in(
     db.commit()
     db.refresh(new_attendance)
 
-    log_audit(db, current_user.id, "CLOCK_IN_SUCCESS", request.client.host if request.client else None, f"Status: {status_str}, Late: {late_minutes} min")
+    log_audit(db, current_user.id, "CLOCK_IN_SUCCESS", request.client.host if request.client else None, f"Status: {status_str}, Late: {late_minutes} min", organization_id=current_user.organization_id)
     return new_attendance
 
 @router.post("/clock-out", response_model=AttendanceOut)
@@ -205,6 +208,7 @@ def clock_out(
     now_utc = datetime.now(timezone.utc)
 
     attendance = db.query(Attendance).filter(
+        Attendance.organization_id == current_user.organization_id,
         Attendance.user_id == current_user.id,
         Attendance.date == today
     ).first()
@@ -233,9 +237,9 @@ def clock_out(
 
     attendance.clock_out = now_utc
 
-    settings = db.query(OfficeSetting).first()
+    settings = db.query(OfficeSetting).filter(OfficeSetting.organization_id == current_user.organization_id).first()
     if not settings:
-        settings = OfficeSetting()
+        settings = OfficeSetting(organization_id=current_user.organization_id)
 
     # Calculate total duration in hours
     clock_in_tz = attendance.clock_in if attendance.clock_in.tzinfo else attendance.clock_in.replace(tzinfo=timezone.utc)
@@ -276,7 +280,7 @@ def clock_out(
     db.commit()
     db.refresh(attendance)
 
-    log_audit(db, current_user.id, "CLOCK_OUT_SUCCESS", request.client.host if request.client else None, f"Hours: {attendance.working_hours:.2f}, OT: {overtime_minutes} min")
+    log_audit(db, current_user.id, "CLOCK_OUT_SUCCESS", request.client.host if request.client else None, f"Hours: {attendance.working_hours:.2f}, OT: {overtime_minutes} min", organization_id=current_user.organization_id)
     return attendance
 
 @router.post("/break/start")
@@ -289,6 +293,7 @@ def start_break(
     now_utc = datetime.now(timezone.utc)
 
     attendance = db.query(Attendance).filter(
+        Attendance.organization_id == current_user.organization_id,
         Attendance.user_id == current_user.id,
         Attendance.date == today
     ).first()
@@ -323,7 +328,7 @@ def start_break(
     db.add(new_break)
     db.commit()
     
-    log_audit(db, current_user.id, "BREAK_START", request.client.host if request.client else None)
+    log_audit(db, current_user.id, "BREAK_START", request.client.host if request.client else None, organization_id=current_user.organization_id)
     return {"message": "Break started successfully", "start_time": now_utc}
 
 @router.post("/break/end")
@@ -336,6 +341,7 @@ def end_break(
     now_utc = datetime.now(timezone.utc)
 
     attendance = db.query(Attendance).filter(
+        Attendance.organization_id == current_user.organization_id,
         Attendance.user_id == current_user.id,
         Attendance.date == today
     ).first()
@@ -368,7 +374,7 @@ def end_break(
     attendance.break_duration = total_break_minutes / 60.0
     db.commit()
 
-    log_audit(db, current_user.id, "BREAK_END", request.client.host if request.client else None, f"Duration: {active_break.duration:.1f} min")
+    log_audit(db, current_user.id, "BREAK_END", request.client.host if request.client else None, f"Duration: {active_break.duration:.1f} min", organization_id=current_user.organization_id)
     return {"message": "Break ended successfully", "duration_minutes": active_break.duration}
 
 @router.post("/corrections", response_model=AttendanceCorrectionOut)
@@ -378,6 +384,7 @@ def create_correction_request(
     current_user: User = Depends(get_current_user)
 ):
     existing = db.query(AttendanceCorrectionRequest).filter(
+        AttendanceCorrectionRequest.organization_id == current_user.organization_id,
         AttendanceCorrectionRequest.user_id == current_user.id,
         AttendanceCorrectionRequest.date == payload.date,
         AttendanceCorrectionRequest.status == "Pending"
@@ -389,6 +396,7 @@ def create_correction_request(
         )
     
     new_request = AttendanceCorrectionRequest(
+        organization_id=current_user.organization_id,
         user_id=current_user.id,
         date=payload.date,
         proposed_clock_in=payload.proposed_clock_in,
@@ -406,12 +414,10 @@ def get_correction_requests(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if current_user.role == "Admin":
-        return db.query(AttendanceCorrectionRequest).order_by(AttendanceCorrectionRequest.created_at.desc()).all()
-    else:
-        return db.query(AttendanceCorrectionRequest).filter(
-            AttendanceCorrectionRequest.user_id == current_user.id
-        ).order_by(AttendanceCorrectionRequest.created_at.desc()).all()
+    query = db.query(AttendanceCorrectionRequest).filter(AttendanceCorrectionRequest.organization_id == current_user.organization_id)
+    if current_user.role == "Employee":
+        query = query.filter(AttendanceCorrectionRequest.user_id == current_user.id)
+    return query.order_by(AttendanceCorrectionRequest.created_at.desc()).all()
 
 @router.patch("/corrections/{id}/review", response_model=AttendanceCorrectionOut)
 def review_correction_request(
@@ -428,7 +434,10 @@ def review_correction_request(
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid correction request ID format")
 
-    corr = db.query(AttendanceCorrectionRequest).filter(AttendanceCorrectionRequest.id == corr_uuid).first()
+    corr = db.query(AttendanceCorrectionRequest).filter(
+        AttendanceCorrectionRequest.id == corr_uuid,
+        AttendanceCorrectionRequest.organization_id == current_user.organization_id
+    ).first()
     if not corr:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -446,13 +455,14 @@ def review_correction_request(
     
     if payload.status == "Approved":
         attendance = db.query(Attendance).filter(
+            Attendance.organization_id == current_user.organization_id,
             Attendance.user_id == corr.user_id,
             Attendance.date == corr.date
         ).first()
         
-        settings = db.query(OfficeSetting).first()
+        settings = db.query(OfficeSetting).filter(OfficeSetting.organization_id == current_user.organization_id).first()
         if not settings:
-            settings = OfficeSetting()
+            settings = OfficeSetting(organization_id=current_user.organization_id)
             db.add(settings)
             db.commit()
             db.refresh(settings)
@@ -504,6 +514,7 @@ def review_correction_request(
             
         if not attendance:
             attendance = Attendance(
+                organization_id=current_user.organization_id,
                 user_id=corr.user_id,
                 date=corr.date,
                 clock_in=c_in,
@@ -536,6 +547,5 @@ def review_correction_request(
     db.refresh(corr)
     
     log_action = "CORRECTION_APPROVED" if payload.status == "Approved" else "CORRECTION_REJECTED"
-    log_audit(db, current_user.id, log_action, request.client.host if request.client else None, f"Request ID: {corr.id}, Employee ID: {corr.user_id}")
+    log_audit(db, current_user.id, log_action, request.client.host if request.client else None, f"Request ID: {corr.id}, Employee ID: {corr.user_id}", organization_id=current_user.organization_id)
     return corr
-

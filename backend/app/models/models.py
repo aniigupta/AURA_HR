@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, date, time, timezone
 from sqlalchemy import (
-    Column, String, Boolean, DateTime, Date, Time, Float, Integer, ForeignKey, Text, CheckConstraint, Index
+    Column, String, Boolean, DateTime, Date, Time, Float, Integer, ForeignKey, Text, CheckConstraint, Index, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -10,24 +10,49 @@ from app.core.database import Base
 def utc_now():
     return datetime.now(timezone.utc)
 
-class User(Base):
-    __tablename__ = "users"
+class Organization(Base):
+    __tablename__ = "organizations"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=False)
+    slug = Column(String, unique=True, index=True, nullable=False)
+    plan = Column(String, default="Starter")  # "Starter", "Growth", "Enterprise"
+    max_employees = Column(Integer, default=25)
+    is_active = Column(Boolean, default=True, index=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    # Relationships
+    users = relationship("User", back_populates="organization", cascade="all, delete-orphan")
+    departments = relationship("Department", back_populates="organization", cascade="all, delete-orphan")
+    office_setting = relationship("OfficeSetting", back_populates="organization", uselist=False, cascade="all, delete-orphan")
+    holidays = relationship("Holiday", back_populates="organization", cascade="all, delete-orphan")
+    audit_logs = relationship("AuditLog", back_populates="organization", cascade="all, delete-orphan")
+    attendances = relationship("Attendance", back_populates="organization", cascade="all, delete-orphan")
+    leave_requests = relationship("LeaveRequest", back_populates="organization", cascade="all, delete-orphan")
+    correction_requests = relationship("AttendanceCorrectionRequest", back_populates="organization", cascade="all, delete-orphan")
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "email", name="uq_org_user_email"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
+    email = Column(String, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     role = Column(String, CheckConstraint("role IN ('Admin', 'Employee')"), nullable=False)  # "Admin" or "Employee"
     is_active = Column(Boolean, default=True, index=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
-    # MFA (TOTP). totp_secret is set as soon as setup begins but mfa_enabled
-    # only flips to True once the user proves possession by verifying a code
-    # (see /auth/mfa/enable) — a secret alone doesn't mean MFA is active.
+    # MFA (TOTP)
     totp_secret = Column(String, nullable=True)
     mfa_enabled = Column(Boolean, default=False, nullable=False)
 
     # Relationships
+    organization = relationship("Organization", back_populates="users")
     profile = relationship("EmployeeProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
     attendances = relationship("Attendance", back_populates="user", cascade="all, delete-orphan")
     leave_requests = relationship("LeaveRequest", back_populates="user", foreign_keys="LeaveRequest.user_id", cascade="all, delete-orphan")
@@ -36,22 +61,31 @@ class User(Base):
 
 class Department(Base):
     __tablename__ = "departments"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "name", name="uq_org_department_name"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True, nullable=False)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, index=True, nullable=False)
     description = Column(String, nullable=True)
 
     # Relationships
+    organization = relationship("Organization", back_populates="departments")
     profiles = relationship("EmployeeProfile", back_populates="department")
 
 class EmployeeProfile(Base):
     __tablename__ = "employee_profiles"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "employee_id", name="uq_org_employee_id"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
     first_name = Column(String, nullable=False)
     last_name = Column(String, nullable=False)
-    employee_id = Column(String, unique=True, index=True, nullable=False)
+    employee_id = Column(String, index=True, nullable=False)
     phone = Column(String, nullable=True)
     designation = Column(String, nullable=True)
     department_id = Column(Integer, ForeignKey("departments.id", ondelete="SET NULL"), nullable=True, index=True)
@@ -80,10 +114,12 @@ class EmployeeProfile(Base):
 class Attendance(Base):
     __tablename__ = "attendance"
     __table_args__ = (
+        Index("ix_attendance_org_date", "organization_id", "date"),
         Index("ix_attendance_user_date", "user_id", "date"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     date = Column(Date, default=date.today, index=True)
     clock_in = Column(DateTime(timezone=True), nullable=False)
@@ -107,6 +143,7 @@ class Attendance(Base):
     modification_reason = Column(String, nullable=True)
 
     # Relationships
+    organization = relationship("Organization", back_populates="attendances")
     user = relationship("User", back_populates="attendances")
     break_sessions = relationship("BreakSession", back_populates="attendance", cascade="all, delete-orphan")
 
@@ -125,10 +162,12 @@ class BreakSession(Base):
 class LeaveRequest(Base):
     __tablename__ = "leave_requests"
     __table_args__ = (
+        Index("ix_leave_org_status", "organization_id", "status"),
         Index("ix_leave_user_dates", "user_id", "start_date", "end_date"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     leave_type = Column(String, nullable=False)  # "Casual", "Sick", "Paid", "Unpaid", "Emergency"
     start_date = Column(Date, nullable=False, index=True)
@@ -140,24 +179,30 @@ class LeaveRequest(Base):
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
     # Relationships
+    organization = relationship("Organization", back_populates="leave_requests")
     user = relationship("User", back_populates="leave_requests", foreign_keys=[user_id])
     approver = relationship("User", foreign_keys=[approved_by])
 
 class Holiday(Base):
     __tablename__ = "holidays"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    date = Column(Date, unique=True, index=True, nullable=False)
-    description = Column(String, nullable=True)
-
-class OfficeSetting(Base):
-    __tablename__ = "office_settings"
     __table_args__ = (
-        CheckConstraint("id = 1", name="single_row_constraint"),
+        UniqueConstraint("organization_id", "date", name="uq_org_holiday_date"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    date = Column(Date, index=True, nullable=False)
+    description = Column(String, nullable=True)
+
+    # Relationships
+    organization = relationship("Organization", back_populates="holidays")
+
+class OfficeSetting(Base):
+    __tablename__ = "office_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
     latitude = Column(Float, default=28.6139)  # Default: New Delhi
     longitude = Column(Float, default=77.2090)
     allowed_radius = Column(Float, default=100.0)  # in meters
@@ -168,10 +213,14 @@ class OfficeSetting(Base):
     weekends = Column(String, default="Saturday,Sunday")  # Comma-separated list
     timezone = Column(String, default="Asia/Kolkata")
 
+    # Relationships
+    organization = relationship("Organization", back_populates="office_setting")
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     action = Column(String, nullable=False, index=True)
     ip_address = Column(String, nullable=True)
@@ -179,15 +228,18 @@ class AuditLog(Base):
     timestamp = Column(DateTime(timezone=True), default=utc_now, index=True)
 
     # Relationships
+    organization = relationship("Organization", back_populates="audit_logs")
     user = relationship("User", back_populates="audit_logs")
 
 class AttendanceCorrectionRequest(Base):
     __tablename__ = "attendance_correction_requests"
     __table_args__ = (
+        Index("ix_correction_org_date", "organization_id", "date"),
         Index("ix_correction_user_date", "user_id", "date"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     date = Column(Date, nullable=False, index=True)
     proposed_clock_in = Column(DateTime(timezone=True), nullable=True)
@@ -198,5 +250,5 @@ class AttendanceCorrectionRequest(Base):
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
     # Relationships
+    organization = relationship("Organization", back_populates="correction_requests")
     user = relationship("User", back_populates="correction_requests", foreign_keys=[user_id])
-

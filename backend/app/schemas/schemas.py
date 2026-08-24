@@ -32,6 +32,44 @@ class StandardErrorResponse(BaseModel):
 class MessageResponse(BaseModel):
     message: str
 
+# Organization / Tenant Schemas
+class OrganizationBase(BaseModel):
+    name: str = Field(..., min_length=2, max_length=150)
+    slug: str = Field(..., min_length=2, max_length=100, pattern="^[a-z0-9-]+$")
+
+class OrganizationCreate(OrganizationBase):
+    plan: Optional[str] = Field("Starter", pattern="^(Starter|Growth|Enterprise)$")
+    max_employees: Optional[int] = Field(25, ge=1)
+
+class OrganizationUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=2, max_length=150)
+    plan: Optional[str] = Field(None, pattern="^(Starter|Growth|Enterprise)$")
+    max_employees: Optional[int] = Field(None, ge=1)
+    is_active: Optional[bool] = None
+
+class OrganizationOut(OrganizationBase):
+    id: UUID
+    plan: str
+    max_employees: int
+    is_active: bool
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+# Company Self-Service Registration Schema
+class CompanyRegisterRequest(BaseModel):
+    company_name: str = Field(..., min_length=2, max_length=150)
+    company_slug: str = Field(..., min_length=2, max_length=100, pattern="^[a-z0-9-]+$")
+    admin_name: str = Field(..., min_length=2, max_length=100)
+    admin_email: EmailStr
+    admin_password: str = Field(..., min_length=PASSWORD_MIN_LENGTH)
+    admin_phone: Optional[str] = Field(None, max_length=30)
+    designation: Optional[str] = Field("Founder & Managing Director", max_length=100)
+    latitude: Optional[float] = Field(28.6139, ge=-90.0, le=90.0)
+    longitude: Optional[float] = Field(77.2090, ge=-180.0, le=180.0)
+    allowed_radius: Optional[float] = Field(150.0, ge=10.0, le=50000.0)
+
+    _validate_password = field_validator("admin_password")(validate_password_strength)
+
 # Department Schemas
 class DepartmentBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
@@ -42,6 +80,7 @@ class DepartmentCreate(DepartmentBase):
 
 class DepartmentOut(DepartmentBase):
     id: int
+    organization_id: UUID
     model_config = ConfigDict(from_attributes=True)
 
 # Employee Profile Schemas
@@ -86,6 +125,7 @@ class EmployeeProfileUpdate(BaseModel):
 
 class EmployeeProfileOut(EmployeeProfileBase):
     id: UUID
+    organization_id: UUID
     user_id: UUID
     profile_image_url: Optional[str] = None
     department: Optional[DepartmentOut] = None
@@ -115,11 +155,13 @@ class UserResetPassword(BaseModel):
 
 class UserOut(UserBase):
     id: UUID
+    organization_id: UUID
     role: str
     is_active: bool
     mfa_enabled: bool
     created_at: datetime
     profile: Optional[EmployeeProfileOut] = None
+    organization: Optional[OrganizationOut] = None
     model_config = ConfigDict(from_attributes=True)
 
 # Token Schemas
@@ -130,15 +172,18 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     user_id: Optional[str] = None
+    organization_id: Optional[str] = None
     role: Optional[str] = None
 
 # Login Schema
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    company_slug: Optional[str] = None
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
+    company_slug: Optional[str] = None
 
 # MFA (TOTP) Schemas
 class MfaLoginChallenge(BaseModel):
@@ -204,6 +249,7 @@ class AttendanceBase(BaseModel):
 
 class AttendanceOut(AttendanceBase):
     id: UUID
+    organization_id: UUID
     user_id: UUID
     break_sessions: List[BreakSessionOut] = []
     model_config = ConfigDict(from_attributes=True)
@@ -221,6 +267,7 @@ class AttendanceCorrectionReview(BaseModel):
 
 class AttendanceCorrectionOut(BaseModel):
     id: UUID
+    organization_id: UUID
     user_id: UUID
     date: date
     proposed_clock_in: Optional[datetime] = None
@@ -245,6 +292,7 @@ class LeaveRequestReview(BaseModel):
 
 class LeaveRequestOut(BaseModel):
     id: UUID
+    organization_id: UUID
     user_id: UUID
     leave_type: str
     start_date: date
@@ -268,6 +316,7 @@ class HolidayCreate(HolidayBase):
 
 class HolidayOut(HolidayBase):
     id: int
+    organization_id: UUID
     model_config = ConfigDict(from_attributes=True)
 
 # Office Settings Schemas
@@ -284,6 +333,7 @@ class OfficeSettingUpdate(BaseModel):
 
 class OfficeSettingOut(BaseModel):
     id: int
+    organization_id: UUID
     latitude: float
     longitude: float
     allowed_radius: float
@@ -298,6 +348,7 @@ class OfficeSettingOut(BaseModel):
 # Audit Log Schema
 class AuditLogOut(BaseModel):
     id: UUID
+    organization_id: Optional[UUID] = None
     user_id: Optional[UUID] = None
     action: str
     ip_address: Optional[str] = None
@@ -305,4 +356,3 @@ class AuditLogOut(BaseModel):
     timestamp: datetime
     user: Optional[UserOut] = None
     model_config = ConfigDict(from_attributes=True)
-

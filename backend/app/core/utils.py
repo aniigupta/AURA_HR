@@ -78,13 +78,21 @@ def sanitize_audit_details(details: Optional[str]) -> Optional[str]:
         details = details[:1000] + "...[truncated]"
     return details
 
-def log_audit(db: Session, user_id: Optional[Any], action: str, ip_address: Optional[str], details: Optional[str] = None) -> None:
+def log_audit(
+    db: Session,
+    user_id: Optional[Any],
+    action: str,
+    ip_address: Optional[str],
+    details: Optional[str] = None,
+    organization_id: Optional[Any] = None
+) -> None:
     """
     Utility function to write logs to the AuditLog table with sensitive information stripped.
     """
     try:
         sanitized = sanitize_audit_details(details)
         log_entry = AuditLog(
+            organization_id=organization_id,
             user_id=user_id,
             action=action,
             ip_address=ip_address,
@@ -144,7 +152,10 @@ def get_day_status_for_employee(db: Session, user_id: Any, check_date: date, pro
         return "Work From Home"
 
     # 2. Check if Holiday
-    holiday = db.query(Holiday).filter(Holiday.date == check_date).first()
+    holiday_query = db.query(Holiday).filter(Holiday.date == check_date)
+    if profile and profile.organization_id:
+        holiday_query = holiday_query.filter(Holiday.organization_id == profile.organization_id)
+    holiday = holiday_query.first()
     if holiday:
         return "Holiday"
 

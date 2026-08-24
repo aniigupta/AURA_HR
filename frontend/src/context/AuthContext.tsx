@@ -27,6 +27,10 @@ interface User {
   id: string;
   email: string;
   role: "Admin" | "Employee";
+  organization_id?: string;
+  organization_name?: string;
+  organization_slug?: string;
+  plan?: string;
   is_active: boolean;
   mfa_enabled: boolean;
   profile?: UserProfile;
@@ -48,10 +52,25 @@ interface LoginResult {
   mfaToken?: string;
 }
 
+interface CompanyRegisterPayload {
+  company_name: string;
+  company_slug: string;
+  admin_name: string;
+  admin_email: string;
+  admin_password: string;
+  admin_phone?: string;
+  designation?: string;
+  latitude?: number;
+  longitude?: number;
+  allowed_radius?: number;
+  plan?: string;
+}
+
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<LoginResult>;
+  registerCompany: (payload: CompanyRegisterPayload) => Promise<void>;
   verifyMfa: (mfaToken: string, code: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -104,12 +123,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isLoading) return;
 
+    const publicPaths = ["/login", "/forgot-password", "/register"];
+
     if (!user) {
-      if (pathname !== "/login" && pathname !== "/forgot-password") {
+      if (!publicPaths.includes(pathname)) {
         router.push("/login");
       }
     } else {
-      if (pathname === "/login" || pathname === "/") {
+      if (publicPaths.includes(pathname) || pathname === "/") {
         if (user.role === "Admin") {
           router.push("/admin/dashboard");
         } else {
@@ -132,9 +153,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       if ("mfa_required" in data && data.mfa_required) {
-        // Password verified, but this Admin account has MFA enabled — no
-        // session yet. The caller (login page) collects a TOTP code and
-        // calls verifyMfa() to actually complete the login.
         setIsLoading(false);
         return { mfaRequired: true, mfaToken: data.mfa_token };
       }
@@ -155,6 +173,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const registerCompany = async (payload: CompanyRegisterPayload): Promise<void> => {
+    setIsLoading(true);
+    try {
+      const data = await apiFetch<LoginResponse>("/auth/register-company", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setUser(data.user);
+      router.push("/admin/dashboard");
+    } catch (err) {
+      setIsLoading(false);
+      throw err;
+    }
+  };
+
   const verifyMfa = async (mfaToken: string, code: string) => {
     setIsLoading(true);
     try {
@@ -163,7 +196,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ mfa_token: mfaToken, code }),
       });
       setUser(data.user);
-      // MFA only ever applies to Admin accounts (see backend/app/routers/auth.py)
       router.push("/admin/dashboard");
     } catch (err) {
       setIsLoading(false);
@@ -185,7 +217,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, verifyMfa, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, isLoading, login, registerCompany, verifyMfa, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
@@ -198,5 +230,4 @@ export function useAuth() {
   }
   return context;
 }
-export type { User, UserProfile };
-
+export type { User, UserProfile, CompanyRegisterPayload };

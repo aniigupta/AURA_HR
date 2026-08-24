@@ -8,10 +8,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.database import SessionLocal, engine, Base
 from app.core.security import get_password_hash
-from app.models.models import User, EmployeeProfile, Department, OfficeSetting, Holiday
-
+from app.models.models import Organization, User, EmployeeProfile, Department, OfficeSetting, Holiday
 
 # Seed Data Definitions
+DEFAULT_ORG_NAME = "Aura Technologies India Pvt Ltd"
+DEFAULT_ORG_SLUG = "aura-tech"
+
 DEFAULT_DEPARTMENTS: List[Dict[str, str]] = [
     {"name": "Engineering & Tech", "description": "Software architecture, cloud infrastructure, and product development"},
     {"name": "Human Resources", "description": "Talent acquisition, employee relations, payroll, and organizational compliance"},
@@ -129,20 +131,33 @@ INDIAN_PUBLIC_HOLIDAYS: List[Dict[str, Any]] = [
     {"name": "Christmas Day", "date": date(2026, 12, 25), "description": "Public Holiday"},
 ]
 
-
 def seed_db() -> None:
-    """Optimized database seeder with batch queries, upsert capabilities, and transaction safety."""
-    print("[*] Initializing Indian Enterprise HRMS Database Seeder...")
+    """Optimized multi-tenant database seeder with default organization, users, and office settings."""
+    print("[*] Initializing Multi-Tenant Indian Enterprise HRMS Database Seeder...")
     Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
     try:
-        # 1. Batch Sync Departments
-        existing_depts = {d.name: d for d in db.query(Department).all()}
+        # 1. Ensure Default Organization exists
+        org = db.query(Organization).filter(Organization.slug == DEFAULT_ORG_SLUG).first()
+        if not org:
+            org = Organization(
+                name=DEFAULT_ORG_NAME,
+                slug=DEFAULT_ORG_SLUG,
+                plan="Enterprise",
+                max_employees=100,
+                is_active=True
+            )
+            db.add(org)
+            db.flush()
+            print(f"  [+] Created Default Organization: {org.name} ({org.slug})")
+
+        # 2. Batch Sync Departments for Organization
+        existing_depts = {d.name: d for d in db.query(Department).filter(Department.organization_id == org.id).all()}
         for item in DEFAULT_DEPARTMENTS:
             name = item["name"]
             if name not in existing_depts:
-                dept = Department(name=name, description=item["description"])
+                dept = Department(organization_id=org.id, name=name, description=item["description"])
                 db.add(dept)
                 db.flush()
                 existing_depts[name] = dept
@@ -150,19 +165,19 @@ def seed_db() -> None:
             else:
                 existing_depts[name].description = item["description"]
 
-        # 2. Sync Office & Geofencing Settings
-        settings = db.query(OfficeSetting).first()
+        # 3. Sync Office & Geofencing Settings for Organization
+        settings = db.query(OfficeSetting).filter(OfficeSetting.organization_id == org.id).first()
         if not settings:
-            settings = OfficeSetting(**DEFAULT_OFFICE_SETTING)
+            settings = OfficeSetting(organization_id=org.id, **DEFAULT_OFFICE_SETTING)
             db.add(settings)
             db.flush()
-            print("  [+] Configured Office Settings (Asia/Kolkata IST)")
+            print(f"  [+] Configured Office Settings for {org.name}")
         else:
             for key, val in DEFAULT_OFFICE_SETTING.items():
                 setattr(settings, key, val)
 
-        # 3. Batch Sync Users & Employee Profiles
-        existing_users = {u.email: u for u in db.query(User).all()}
+        # 4. Batch Sync Users & Employee Profiles for Organization
+        existing_users = {u.email: u for u in db.query(User).filter(User.organization_id == org.id).all()}
         for u_data in DEFAULT_USERS:
             email = u_data["email"]
             prof_data = u_data["profile"]
@@ -171,6 +186,7 @@ def seed_db() -> None:
 
             if email not in existing_users:
                 user = User(
+                    organization_id=org.id,
                     email=email,
                     hashed_password=get_password_hash(u_data["password"]),
                     role=u_data["role"],
@@ -180,6 +196,7 @@ def seed_db() -> None:
                 db.flush()
 
                 profile = EmployeeProfile(
+                    organization_id=org.id,
                     user_id=user.id,
                     first_name=prof_data["first_name"],
                     last_name=prof_data["last_name"],
@@ -208,26 +225,25 @@ def seed_db() -> None:
                     user.profile.designation = prof_data["designation"]
                     user.profile.phone = prof_data["phone"]
 
-        # 4. Batch Sync Indian Public Holidays
-        existing_holiday_dates = {h.date: h for h in db.query(Holiday).all()}
+        # 5. Batch Sync Public Holidays for Organization
+        existing_holiday_dates = {h.date: h for h in db.query(Holiday).filter(Holiday.organization_id == org.id).all()}
         new_holidays = 0
         for h in INDIAN_PUBLIC_HOLIDAYS:
             if h["date"] not in existing_holiday_dates:
-                db.add(Holiday(name=h["name"], date=h["date"], description=h["description"]))
+                db.add(Holiday(organization_id=org.id, name=h["name"], date=h["date"], description=h["description"]))
                 new_holidays += 1
 
         if new_holidays > 0:
-            print(f"  [+] Added {new_holidays} Indian National/Public Holidays")
+            print(f"  [+] Added {new_holidays} Public Holidays for {org.name}")
 
         db.commit()
-        print("[OK] Indian Enterprise HRMS Database seeded and optimized successfully!")
+        print("[OK] Multi-Tenant Enterprise HRMS Database seeded successfully!")
     except Exception as e:
         db.rollback()
         print(f"[ERROR] Error seeding database: {e}", file=sys.stderr)
         raise
     finally:
         db.close()
-
 
 if __name__ == "__main__":
     seed_db()

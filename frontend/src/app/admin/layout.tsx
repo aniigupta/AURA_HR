@@ -54,23 +54,27 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         }`}
       >
         <div className="flex flex-col h-full">
-          {/* Sidebar Header Brand */}
-          <div className="flex items-center justify-between px-5 h-16 border-b border-slate-100 shrink-0">
-            <Link href="/admin/dashboard" className="flex items-center gap-2.5" onClick={() => setIsSidebarOpen(false)}>
-              <div className="p-2 rounded-xl bg-indigo-600 text-white shadow-xs">
-                <Sparkles className="h-4.5 w-4.5" />
+          {/* Sidebar Header Brand & Tenant Info */}
+          <div className="flex items-center justify-between px-4 h-16 border-b border-slate-100 shrink-0">
+            <Link href="/admin/dashboard" className="flex items-center gap-2.5 min-w-0" onClick={() => setIsSidebarOpen(false)}>
+              <div className="p-2 rounded-xl bg-indigo-600 text-white shadow-xs shrink-0">
+                <Sparkles className="h-4 w-4" />
               </div>
-              <div className="flex flex-col">
-                <span className="font-bold text-base tracking-tight text-slate-900 leading-none">
-                  Aura<span className="text-indigo-600">HR</span>
+              <div className="flex flex-col min-w-0">
+                <span className="font-bold text-sm tracking-tight text-slate-900 leading-tight truncate" title={user?.organization_name || "AuraHR"}>
+                  {user?.organization_name || "AuraHR"}
                 </span>
-                <span className="text-[10px] font-medium text-slate-400 tracking-wider">ENTERPRISE HRMS</span>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className="text-[9px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 uppercase tracking-wider">
+                    {user?.plan || "Enterprise"}
+                  </span>
+                </div>
               </div>
             </Link>
             
             {/* Mobile close toggle */}
             <button 
-              className="lg:hidden p-1.5 hover:bg-slate-100 rounded-lg cursor-pointer text-slate-400 hover:text-slate-600"
+              className="lg:hidden p-1.5 hover:bg-slate-100 rounded-lg cursor-pointer text-slate-400 hover:text-slate-600 shrink-0"
               onClick={() => setIsSidebarOpen(false)}
             >
               <X className="h-5 w-5" />
@@ -136,6 +140,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
+            {/* Organization / Workspace Badge */}
+            <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50/60 border border-indigo-100 text-indigo-700">
+              <Building2 className="h-3.5 w-3.5 text-indigo-600" />
+              <span className="text-xs font-semibold max-w-[140px] truncate" title={user?.organization_name || "AuraHR"}>
+                {user?.organization_name || "AuraHR"}
+              </span>
+            </div>
+
             {/* Notification Bell Dropdown */}
             <div className="relative">
               <button

@@ -14,7 +14,7 @@ from app.core.security import (
 )
 from app.core.utils import log_audit, send_email_background, is_login_locked_out, record_failed_login, clear_failed_logins
 from app.core.limiter import limiter
-from app.models.models import Organization, User, EmployeeProfile, Department, OfficeSetting, Holiday
+from app.models.models import Organization, User, EmployeeProfile, Department, OfficeSetting, Holiday, CompanyPolicy
 from app.schemas.schemas import (
     LoginRequest, UserOut, UserUpdatePassword, ForgotPasswordRequest, MessageResponse,
     MfaLoginChallenge, MfaSetupResponse, MfaCodeRequest, MfaVerifyRequest, MfaDisableRequest,
@@ -176,6 +176,16 @@ def register_company(
         )
         db.add(admin_profile)
         db.flush()
+
+        # 7. Bootstrap Starter Company Policies for AI Assistant
+        default_policies = [
+            ("Annual Leave & Time-Off Policy", "Leaves", "### Leave Entitlements\n- **Casual Leave (CL)**: 12 days/year.\n- **Sick Leave (SL)**: 10 days/year.\n- **Paid Leave (PL)**: 15 days/year.\n- **Encashment**: Up to 10 unused PL encashable at year-end."),
+            ("Working Hours & Attendance Policy", "Attendance", "### Office Timings\n- **Standard Hours**: 09:30 AM to 06:30 PM (Mon-Fri).\n- **Grace Period**: 15 minutes before marked Late.\n- **Half Day**: Under 4.0 net hours.\n- **Overtime**: 1.5x hourly rate beyond 8.0 hrs."),
+            ("Work From Home (WFH) Guidelines", "Attendance", "### Remote Work Guidelines\n- **Eligibility**: Employees with WFH approval enabled on their profile can work remotely.\n- **Marking**: Check in via portal with status 'Work From Home'."),
+            ("Code of Conduct & POSH Guidelines", "Code of Conduct", "### Code of Conduct\n- **POSH Compliance**: Strict zero tolerance for harassment.\n- **Confidentiality**: Client and company data is proprietary.\n- **Notice Period**: Standard notice period is 30 days.")
+        ]
+        for p_title, p_cat, p_cont in default_policies:
+            db.add(CompanyPolicy(organization_id=org.id, title=p_title, category=p_cat, content=p_cont, is_published=True))
 
         db.commit()
 

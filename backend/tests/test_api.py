@@ -711,4 +711,86 @@ def test_multi_tenant_data_isolation(client, db):
     })
     assert create_b_emp.status_code == 200
 
+# --- AI HR Assistant & Company Policy Tests ---
+
+def test_company_policy_crud_and_tenant_isolation(admin_client, employee_client, client):
+    # 1. Admin creates a new custom company policy
+    create_res = admin_client.post("/api/assistant/policies", json={
+        "title": "Gym & Wellness Allowance",
+        "category": "Benefits",
+        "content": "All full-time employees are eligible for INR 2,000 monthly fitness reimbursement.",
+        "is_published": True
+    })
+    assert create_res.status_code == 200
+    policy_id = create_res.json()["id"]
+    assert create_res.json()["title"] == "Gym & Wellness Allowance"
+
+    # 2. Employee can read published policies
+    emp_policies_res = employee_client.get("/api/assistant/policies")
+    assert emp_policies_res.status_code == 200
+    policies = emp_policies_res.json()
+    assert any(p["id"] == policy_id for p in policies)
+
+    # 3. Employee cannot create/update/delete policies
+    emp_create_fail = employee_client.post("/api/assistant/policies", json={
+        "title": "Unauthorized Policy",
+        "category": "General",
+        "content": "Test"
+    })
+    assert emp_create_fail.status_code == 403
+
+    # 4. Admin updates policy
+    update_res = admin_client.put(f"/api/assistant/policies/{policy_id}", json={
+        "title": "Gym & Health Club Allowance",
+        "content": "Updated reimbursement limit to INR 2,500 monthly."
+    })
+    assert update_res.status_code == 200
+    assert update_res.json()["title"] == "Gym & Health Club Allowance"
+
+    # 5. Cross-tenant isolation check: Register Company C and ensure it cannot see Company A's policy
+    reg_c = client.post("/api/auth/register-company", json={
+        "company_name": "Gamma Tech",
+        "company_slug": "gamma-tech",
+        "admin_name": "Admin Gamma",
+        "admin_email": "admin@gamma.com",
+        "admin_password": "GammaPassword123"
+    })
+    assert reg_c.status_code == 200
+    token_c = reg_c.cookies["access_token"]
+    client.cookies.set("access_token", token_c)
+
+    gamma_policies = client.get("/api/assistant/policies").json()
+    assert not any(p["title"] == "Gym & Health Club Allowance" for p in gamma_policies)
+
+    # 6. Admin deletes policy
+    del_res = admin_client.delete(f"/api/assistant/policies/{policy_id}")
+    assert del_res.status_code == 200
+
+def test_ai_assistant_chat_policy_and_balance_answering(employee_client, db):
+    # 1. Ask about leave balance
+    res_leave = employee_client.post("/api/assistant/chat", json={
+        "message": "How many casual and sick leaves do I have remaining?"
+    })
+    assert res_leave.status_code == 200
+    body_leave = res_leave.json()
+    assert "Casual" in body_leave["reply"]
+    assert "12" in body_leave["reply"] # Default test employee casual balance is 12
+    assert len(body_leave["sources"]) > 0
+
+    # 2. Ask about office timings
+    res_timing = employee_client.post("/api/assistant/chat", json={
+        "message": "What are our official office timings and working hours?"
+    })
+    assert res_timing.status_code == 200
+    body_timing = res_timing.json()
+    assert "10:00" in body_timing["reply"] or "office" in body_timing["reply"].lower()
+
+    # 3. Ask about general policy help
+    res_help = employee_client.post("/api/assistant/chat", json={
+        "message": "Hi, what policies can you help me with?"
+    })
+    assert res_help.status_code == 200
+    assert "Assistant" in res_help.json()["reply"]
+
+
 

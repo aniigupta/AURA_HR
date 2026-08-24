@@ -92,6 +92,9 @@ class Settings:
     # by default so dev/test environments don't try to report anything.
     SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
 
+    # AI HR Assistant (Google Gemini 1.5 Flash API Key)
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+
     @property
     def cors_origins(self) -> List[str]:
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]

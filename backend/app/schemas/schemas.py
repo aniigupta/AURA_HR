@@ -356,3 +356,40 @@ class AuditLogOut(BaseModel):
     timestamp: datetime
     user: Optional[UserOut] = None
     model_config = ConfigDict(from_attributes=True)
+
+# Company Policy Schemas
+class CompanyPolicyBase(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    category: str = Field("General", max_length=50)
+    content: str = Field(..., min_length=1)
+    is_published: bool = True
+
+class CompanyPolicyCreate(CompanyPolicyBase):
+    pass
+
+class CompanyPolicyUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=200)
+    category: Optional[str] = Field(None, max_length=50)
+    content: Optional[str] = Field(None, min_length=1)
+    is_published: Optional[bool] = None
+
+class CompanyPolicyOut(CompanyPolicyBase):
+    id: UUID
+    organization_id: UUID
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+# AI Assistant Chat Schemas
+class ChatMessage(BaseModel):
+    role: str = Field(..., pattern="^(user|assistant|model)$")
+    content: str = Field(..., min_length=1)
+
+class AIChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000)
+    history: Optional[List[ChatMessage]] = Field(default_factory=list)
+
+class AIChatResponse(BaseModel):
+    reply: str
+    sources: List[str] = Field(default_factory=list)
+

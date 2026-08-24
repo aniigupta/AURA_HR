@@ -10,6 +10,7 @@ import {
   Briefcase, Award, Building2, IndianRupee, CheckCircle2, AlertCircle
 } from "lucide-react";
 import { Button, SearchInput } from "@/components/ui/atoms";
+import HRAssistantChatbot from "@/components/HRAssistantChatbot";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
@@ -215,6 +216,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           {children}
         </main>
       </div>
+
+      {/* Floating AI HR Policy Assistant Chatbot */}
+      <HRAssistantChatbot />
     </div>
   );
 }

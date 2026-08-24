@@ -7,7 +7,10 @@ import { useAuth } from "@/context/AuthContext";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, Input, Skeleton, Badge } from "@/components/ui/atoms";
 import { toast } from "@/components/ui/toast";
-import { MapPin, Clock, CalendarDays, Plus, Trash2, ShieldAlert, ShieldCheck } from "lucide-react";
+import { 
+  MapPin, Clock, CalendarDays, Plus, Trash2, ShieldAlert, ShieldCheck, 
+  BookOpen, Edit3, Sparkles, CheckCircle2, FileText, ChevronRight
+} from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog } from "@/components/ui/dialog";
 
@@ -28,6 +31,15 @@ export interface HolidayData {
   name: string;
   date: string;
   description?: string;
+}
+
+export interface CompanyPolicyData {
+  id: string;
+  title: string;
+  category: string;
+  content: string;
+  is_published: boolean;
+  updated_at?: string;
 }
 
 function OfficeSettingsForm({ initialData }: { initialData: OfficeSettingsData }) {
@@ -98,39 +110,29 @@ function OfficeSettingsForm({ initialData }: { initialData: OfficeSettingsData }
         <Input label="Office Latitude *" type="number" step="any" value={lat} onChange={(e) => setLat(e.target.value)} required />
         <Input label="Office Longitude *" type="number" step="any" value={lng} onChange={(e) => setLng(e.target.value)} required />
       </div>
-      
-      <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-        <Button type="button" variant="outline" size="sm" onClick={fetchCurrentLocation} className="shrink-0 self-start sm:self-auto">
-          Use My Current GPS
+
+      <div className="flex justify-start">
+        <Button type="button" variant="outline" size="sm" onClick={fetchCurrentLocation} className="text-xs text-indigo-600 font-semibold bg-indigo-50 border-indigo-200">
+          <MapPin className="h-3.5 w-3.5 mr-1" />
+          Auto-Detect Current GPS Coordinates
         </Button>
-        <span className="text-[10px] sm:text-[11px] text-slate-500 flex items-center gap-1">
-          <ShieldAlert className="h-3.5 w-3.5 text-amber-600 shrink-0" />
-          Must be inside office boundaries when capturing GPS coords.
-        </span>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-3.5 border-t border-slate-100 pt-3.5">
-        <Input label="Allowed Radius (meters) *" type="number" value={radius} onChange={(e) => setRadius(e.target.value)} required />
-        <Input label="Weekend Days (comma-separated)" value={weekendsStr} onChange={(e) => setWeekendsStr(e.target.value)} placeholder="Saturday,Sunday" />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-3.5">
+        <Input label="Allowed Radius (Meters) *" type="number" min="10" max="5000" value={radius} onChange={(e) => setRadius(e.target.value)} required />
+        <Input label="Office Shift Start *" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} required />
+        <Input label="Office Shift End *" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} required />
       </div>
 
-      {/* Office timings */}
-      <div className="border-t border-slate-100 pt-3.5">
-        <h4 className="text-xs font-bold text-slate-900 mb-3 flex items-center gap-1.5 uppercase">
-          <Clock className="h-4 w-4 text-indigo-600" />
-          Office Shift & Lunch Hours
-        </h4>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <Input label="Shift Start *" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} required />
-          <Input label="Shift End *" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} required />
-          <Input label="Lunch (hrs) *" type="number" step="any" value={lunchHrs} onChange={(e) => setLunchHrs(e.target.value)} required />
-          <Input label="Req. Hours *" type="number" step="any" value={reqHrs} onChange={(e) => setReqHrs(e.target.value)} required />
-        </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-3.5">
+        <Input label="Lunch Break Duration (Hours) *" type="number" step="0.25" min="0" max="3" value={lunchHrs} onChange={(e) => setLunchHrs(e.target.value)} required />
+        <Input label="Mandatory Working Hours *" type="number" step="0.5" min="1" max="16" value={reqHrs} onChange={(e) => setReqHrs(e.target.value)} required />
+        <Input label="Designated Weekends *" value={weekendsStr} onChange={(e) => setWeekendsStr(e.target.value)} required placeholder="Saturday,Sunday" />
       </div>
 
-      <div className="flex justify-end pt-3 border-t border-slate-100">
+      <div className="flex justify-end pt-2 border-t border-slate-100">
         <Button type="submit" size="sm" disabled={updateOfficeMutation.isPending}>
-          {updateOfficeMutation.isPending ? "Updating Settings..." : "Save Office Configs"}
+          {updateOfficeMutation.isPending ? "Saving..." : "Save Office Settings"}
         </Button>
       </div>
     </form>
@@ -140,10 +142,10 @@ function OfficeSettingsForm({ initialData }: { initialData: OfficeSettingsData }
 function MfaSecurityCard() {
   const { user, refreshUser } = useAuth();
   const [isSetupOpen, setIsSetupOpen] = useState(false);
+  const [isDisableOpen, setIsDisableOpen] = useState(false);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
   const [enableCode, setEnableCode] = useState("");
-  const [isDisableOpen, setIsDisableOpen] = useState(false);
   const [disablePassword, setDisablePassword] = useState("");
 
   const setupMutation = useMutation({
@@ -154,14 +156,18 @@ function MfaSecurityCard() {
       setIsSetupOpen(true);
     },
     onError: (err: unknown) => {
-      toast.error(err instanceof Error ? err.message : "Failed to start MFA setup.");
+      const msg = err instanceof Error ? err.message : "Failed to start 2FA setup";
+      toast.error(msg);
     }
   });
 
   const enableMutation = useMutation({
-    mutationFn: (code: string) => apiFetch("/auth/mfa/enable", { method: "POST", body: JSON.stringify({ code }) }),
+    mutationFn: (code: string) => apiFetch<{ message: string }>("/auth/mfa/enable", {
+      method: "POST",
+      body: JSON.stringify({ code })
+    }),
     onSuccess: async () => {
-      toast.success("Two-factor authentication enabled.");
+      toast.success("Two-Factor Authentication is now enabled.");
       setIsSetupOpen(false);
       setEnableCode("");
       setQrCode(null);
@@ -169,27 +175,32 @@ function MfaSecurityCard() {
       await refreshUser();
     },
     onError: (err: unknown) => {
-      toast.error(err instanceof Error ? err.message : "Invalid authentication code.");
+      const msg = err instanceof Error ? err.message : "Invalid code. Please try again.";
+      toast.error(msg);
     }
   });
 
   const disableMutation = useMutation({
-    mutationFn: (password: string) => apiFetch("/auth/mfa/disable", { method: "POST", body: JSON.stringify({ password }) }),
+    mutationFn: (password: string) => apiFetch<{ message: string }>("/auth/mfa/disable", {
+      method: "POST",
+      body: JSON.stringify({ password })
+    }),
     onSuccess: async () => {
-      toast.success("Two-factor authentication disabled.");
+      toast.success("Two-Factor Authentication has been disabled.");
       setIsDisableOpen(false);
       setDisablePassword("");
       await refreshUser();
     },
     onError: (err: unknown) => {
-      toast.error(err instanceof Error ? err.message : "Incorrect password.");
+      const msg = err instanceof Error ? err.message : "Failed to disable 2FA";
+      toast.error(msg);
     }
   });
 
   const handleEnableSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (enableCode.length !== 6) {
-      toast.error("Enter the 6-digit code from your authenticator app.");
+      toast.error("Please enter the 6-digit code from your authenticator app");
       return;
     }
     enableMutation.mutate(enableCode);
@@ -198,54 +209,64 @@ function MfaSecurityCard() {
   const handleDisableSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!disablePassword) {
-      toast.error("Enter your password to confirm.");
+      toast.error("Password is required to disable 2FA");
       return;
     }
     disableMutation.mutate(disablePassword);
   };
 
+  const mfaEnabled = !!user?.mfa_enabled;
+
   return (
     <Card className="bg-white border-slate-200 p-4 sm:p-5">
-      <CardHeader className="flex flex-row items-center gap-3 p-0 pb-4 border-b border-slate-100">
-        <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600 shrink-0">
-          <ShieldCheck className="h-5 w-5" />
+      <CardHeader className="flex flex-row items-center justify-between p-0 pb-4 border-b border-slate-100">
+        <div className="flex items-center gap-3">
+          <div className={`p-2.5 rounded-xl shrink-0 ${mfaEnabled ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"}`}>
+            {mfaEnabled ? <ShieldCheck className="h-5 w-5" /> : <ShieldAlert className="h-5 w-5" />}
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-xs sm:text-sm font-bold text-slate-900">TWO-FACTOR AUTHENTICATION (2FA)</CardTitle>
+              <Badge variant={mfaEnabled ? "success" : "warning"} className="text-[10px]">
+                {mfaEnabled ? "ENABLED" : "DISABLED"}
+              </Badge>
+            </div>
+            <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">
+              Protect your Admin account with an authenticator app (Google Authenticator, Microsoft Authenticator)
+            </p>
+          </div>
         </div>
         <div>
-          <CardTitle className="text-xs sm:text-sm font-bold text-slate-900">TWO-FACTOR AUTHENTICATION</CardTitle>
-          <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">Extra login verification for your own Admin account</p>
+          {mfaEnabled ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsDisableOpen(true)}
+              className="text-rose-600 border-rose-200 hover:bg-rose-50"
+            >
+              Disable 2FA
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              onClick={() => setupMutation.mutate()}
+              disabled={setupMutation.isPending}
+            >
+              {setupMutation.isPending ? "Generating..." : "Enable 2FA"}
+            </Button>
+          )}
         </div>
       </CardHeader>
 
-      <div className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Badge variant={user?.mfa_enabled ? "success" : "neutral"}>
-            {user?.mfa_enabled ? "Enabled" : "Disabled"}
-          </Badge>
-          <span className="text-xs text-slate-500">
-            {user?.mfa_enabled
-              ? "Your account requires a code from your authenticator app at login."
-              : "Your account currently only requires a password at login."}
-          </span>
-        </div>
-        {user?.mfa_enabled ? (
-          <Button size="sm" variant="outline" onClick={() => setIsDisableOpen(true)} className="shrink-0">
-            Disable
-          </Button>
-        ) : (
-          <Button size="sm" onClick={() => setupMutation.mutate()} disabled={setupMutation.isPending} className="shrink-0">
-            {setupMutation.isPending ? "Generating..." : "Enable MFA"}
-          </Button>
-        )}
-      </div>
-
       <Dialog isOpen={isSetupOpen} onClose={() => setIsSetupOpen(false)} title="Set Up Two-Factor Authentication" size="sm">
-        <div className="space-y-3">
+        <div className="space-y-3.5">
           <p className="text-xs text-slate-600">
-            Scan this QR code with an authenticator app (Google Authenticator, Authy, 1Password, etc.), then enter the 6-digit code it generates to confirm.
+            Scan this QR code with your authenticator app, then enter the 6-digit verification code below.
           </p>
           {qrCode && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={qrCode} alt="MFA enrollment QR code" className="mx-auto w-40 h-40 rounded-lg border border-slate-200" />
+            <div className="flex justify-center p-3 bg-slate-50 rounded-xl border border-slate-200">
+              <img src={qrCode} alt="2FA QR Code" className="w-44 h-44" />
+            </div>
           )}
           {secret && (
             <p className="text-[11px] text-slate-500 text-center break-all">
@@ -284,6 +305,235 @@ function MfaSecurityCard() {
             <Button type="button" variant="ghost" size="sm" onClick={() => setIsDisableOpen(false)}>Cancel</Button>
             <Button type="submit" variant="destructive" size="sm" disabled={disableMutation.isPending}>
               {disableMutation.isPending ? "Disabling..." : "Disable MFA"}
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+    </Card>
+  );
+}
+
+function CompanyPolicyCard() {
+  const queryClient = useQueryClient();
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingPolicy, setEditingPolicy] = useState<CompanyPolicyData | null>(null);
+  
+  const [title, setTitle] = useState("");
+  const [category, setCategory] = useState("General");
+  const [content, setContent] = useState("");
+  const [isPublished, setIsPublished] = useState(true);
+
+  const { data: policies = [], isLoading } = useQuery<CompanyPolicyData[]>({
+    queryKey: ["companyPolicies"],
+    queryFn: () => apiFetch<CompanyPolicyData[]>("/assistant/policies"),
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: any) => {
+      if (editingPolicy) {
+        return apiFetch(`/assistant/policies/${editingPolicy.id}`, {
+          method: "PUT",
+          body: JSON.stringify(payload)
+        });
+      }
+      return apiFetch("/assistant/policies", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["companyPolicies"] });
+      toast.success(editingPolicy ? "Policy updated successfully." : "New policy added to AI Knowledge Base.");
+      handleCloseDialog();
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : "Failed to save policy.";
+      toast.error(msg);
+    }
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/assistant/policies/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["companyPolicies"] });
+      toast.success("Policy removed from Knowledge Base.");
+    }
+  });
+
+  const handleOpenCreate = () => {
+    setEditingPolicy(null);
+    setTitle("");
+    setCategory("General");
+    setContent("");
+    setIsPublished(true);
+    setIsDialogOpen(true);
+  };
+
+  const handleOpenEdit = (policy: CompanyPolicyData) => {
+    setEditingPolicy(policy);
+    setTitle(policy.title);
+    setCategory(policy.category);
+    setContent(policy.content);
+    setIsPublished(policy.is_published);
+    setIsDialogOpen(true);
+  };
+
+  const handleCloseDialog = () => {
+    setIsDialogOpen(false);
+    setEditingPolicy(null);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || !content.trim()) {
+      toast.error("Title and Content are required.");
+      return;
+    }
+    saveMutation.mutate({
+      title: title.trim(),
+      category: category.trim(),
+      content: content.trim(),
+      is_published: isPublished
+    });
+  };
+
+  return (
+    <Card className="bg-white border-slate-200 p-4 sm:p-5">
+      <CardHeader className="flex flex-row items-center justify-between p-0 pb-4 border-b border-slate-100">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600 shrink-0">
+            <Sparkles className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-xs sm:text-sm font-bold text-slate-900">COMPANY POLICIES & AI KNOWLEDGE BASE</CardTitle>
+              <Badge variant="primary" className="text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200">
+                AI Powered
+              </Badge>
+            </div>
+            <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">
+              Manage workplace handbooks and policy rules. AuraHR AI Assistant answers employee queries directly from these documents.
+            </p>
+          </div>
+        </div>
+        <Button size="sm" onClick={handleOpenCreate} className="shrink-0 gap-1 font-semibold">
+          <Plus className="h-3.5 w-3.5" />
+          Add Policy
+        </Button>
+      </CardHeader>
+
+      <div className="pt-4">
+        {isLoading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+          </div>
+        ) : policies.length === 0 ? (
+          <div className="text-center py-8 text-slate-400">
+            <BookOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
+            <p className="text-xs font-semibold">No custom policies configured yet.</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">Click &quot;Add Policy&quot; above to create your first company guideline.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {policies.map((p) => (
+              <div key={p.id} className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 transition-colors flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                      {p.category}
+                    </span>
+                    <span className={`text-[10px] font-semibold ${p.is_published ? "text-emerald-600" : "text-amber-600"}`}>
+                      {p.is_published ? "Active" : "Draft"}
+                    </span>
+                  </div>
+                  <h4 className="font-bold text-xs text-slate-900 mt-2">{p.title}</h4>
+                  <p className="text-[11px] text-slate-500 mt-1 line-clamp-3 leading-relaxed whitespace-pre-line">
+                    {p.content}
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-end gap-1 mt-3 pt-2 border-t border-slate-200/60">
+                  <Button size="sm" variant="ghost" onClick={() => handleOpenEdit(p)} className="h-7 text-xs text-slate-600 hover:text-slate-900 gap-1">
+                    <Edit3 className="h-3 w-3" /> Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      if (confirm(`Delete policy: "${p.title}"?`)) {
+                        deleteMutation.mutate(p.id);
+                      }
+                    }}
+                    className="h-7 text-xs text-rose-600 hover:bg-rose-50"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Add / Edit Policy Dialog */}
+      <Dialog isOpen={isDialogOpen} onClose={handleCloseDialog} title={editingPolicy ? "Edit Company Policy" : "Add Policy to AI Knowledge Base"} size="md">
+        <form onSubmit={handleSubmit} className="space-y-3.5">
+          <Input
+            label="Policy Title *"
+            placeholder="e.g. Travel & Daily Food Expense Policy"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            required
+          />
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Policy Category</label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full text-xs font-medium border border-slate-200 rounded-lg p-2 bg-white text-slate-800 focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="Leaves">Leaves & Time-Off</option>
+              <option value="Attendance">Working Hours & Attendance</option>
+              <option value="Code of Conduct">Code of Conduct & Ethics</option>
+              <option value="Benefits">Reimbursements & Perks</option>
+              <option value="General">General / Operations</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Policy Content / Rules (Markdown Supported) *
+            </label>
+            <textarea
+              rows={6}
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              placeholder="Paste policy handbook text, eligibility criteria, FAQs, or reimbursement caps..."
+              className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 text-slate-800"
+              required
+            />
+            <p className="text-[10px] text-slate-400 mt-1">AuraHR AI uses this text to answer employee questions.</p>
+          </div>
+
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              type="checkbox"
+              id="isPub"
+              checked={isPublished}
+              onChange={(e) => setIsPublished(e.target.checked)}
+              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <label htmlFor="isPub" className="text-xs font-medium text-slate-700 cursor-pointer">
+              Publish to Employee AI Assistant immediately
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+            <Button type="button" variant="ghost" size="sm" onClick={handleCloseDialog}>Cancel</Button>
+            <Button type="submit" size="sm" disabled={saveMutation.isPending}>
+              {saveMutation.isPending ? "Saving..." : (editingPolicy ? "Update Policy" : "Save to Knowledge Base")}
             </Button>
           </div>
         </form>
@@ -358,9 +608,12 @@ export default function OfficeSettingsPage() {
       <div className="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 card-shadow">
         <h1 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900">Portal & Geofence Settings</h1>
         <p className="text-xs text-slate-500 mt-0.5">
-          Configure office GPS coordinates, geofenced radius limits, shift rules, and public holidays (India - IST)
+          Configure office GPS coordinates, geofenced radius limits, company AI policies, shift rules, and public holidays (India - IST)
         </p>
       </div>
+
+      {/* AI Policies Knowledge Base Card */}
+      <CompanyPolicyCard />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
         

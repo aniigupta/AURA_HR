@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/atoms";
 import { getBackendUrl } from "@/utils/api";
+import HRAssistantChatbot from "@/components/HRAssistantChatbot";
 
 export default function EmployeeLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
@@ -167,6 +168,9 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
           {children}
         </main>
       </div>
+
+      {/* Floating AI HR Policy Assistant Chatbot */}
+      <HRAssistantChatbot />
     </div>
   );
 }

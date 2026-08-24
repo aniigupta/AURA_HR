@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.database import SessionLocal, engine, Base
 from app.core.security import get_password_hash
-from app.models.models import Organization, User, EmployeeProfile, Department, OfficeSetting, Holiday
+from app.models.models import Organization, User, EmployeeProfile, Department, OfficeSetting, Holiday, CompanyPolicy
 
 # Seed Data Definitions
 DEFAULT_ORG_NAME = "Aura Technologies India Pvt Ltd"
@@ -131,6 +131,29 @@ INDIAN_PUBLIC_HOLIDAYS: List[Dict[str, Any]] = [
     {"name": "Christmas Day", "date": date(2026, 12, 25), "description": "Public Holiday"},
 ]
 
+DEFAULT_COMPANY_POLICIES: List[Dict[str, str]] = [
+    {
+        "title": "Annual Leave & Time-Off Policy",
+        "category": "Leaves",
+        "content": "### Leave Entitlements\n- **Casual Leave (CL)**: 12 days per calendar year. Maximum 3 consecutive days allowed.\n- **Sick Leave (SL)**: 10 days per calendar year. Medical certificate required for absences exceeding 2 consecutive days.\n- **Earned / Paid Leave (PL)**: 15 days per calendar year. Must be applied at least 7 days in advance.\n- **Leave Encashment**: Up to 10 unused Paid Leaves can be encashed at the end of the financial year.\n- **Application Process**: Apply via the AuraHR Leave Management portal. Requests must be approved by your reporting manager."
+    },
+    {
+        "title": "Working Hours, Geofencing & Attendance Policy",
+        "category": "Attendance",
+        "content": "### Office Timings & Attendance Rules\n- **Standard Hours**: 09:30 AM to 06:30 PM (Monday through Friday).\n- **Core Hours**: All employees must be available between 11:00 AM and 05:00 PM.\n- **Grace Period**: 15 minutes grace period for clock-in (up to 09:45 AM). Clocking in after 09:45 AM is automatically logged as 'Late'.\n- **Half Day Rule**: Net working hours under 4.0 hours will be counted as a Half Day.\n- **Overtime Calculation**: Overtime is calculated for hours logged beyond 8.0 net working hours at 1.5x hourly rate.\n- **Geofencing & Selfie**: On-site employees must clock in within the registered office geofence radius (100m) with selfie verification."
+    },
+    {
+        "title": "Work From Home (WFH) & Remote Work Guidelines",
+        "category": "Attendance",
+        "content": "### Remote Work Guidelines\n- **Eligibility**: Employees with WFH approval enabled on their profile can work remotely.\n- **Coordination**: Mark attendance with status 'Work From Home' upon starting work.\n- **Availability**: Be responsive on Slack/Teams and attend all scheduled team syncs.\n- **Information Security**: Ensure connection through secure Wi-Fi networks and adhere to company data protection guidelines."
+    },
+    {
+        "title": "Code of Conduct, POSH & Workplace Ethics",
+        "category": "Code of Conduct",
+        "content": "### Workplace Ethics & POSH Guidelines\n- **Zero Tolerance on Harassment**: Strict adherence to the Prevention of Sexual Harassment (POSH) Act. Any misconduct will result in immediate disciplinary inquiry.\n- **Confidentiality**: Client data, proprietary source code, and internal financial figures are strictly confidential.\n- **Separation & Notice Period**: Standard notice period is 30 days for confirmed staff and 15 days during probation."
+    }
+]
+
 def seed_db() -> None:
     """Optimized multi-tenant database seeder with default organization, users, and office settings."""
     print("[*] Initializing Multi-Tenant Indian Enterprise HRMS Database Seeder...")
@@ -236,6 +259,23 @@ def seed_db() -> None:
         if new_holidays > 0:
             print(f"  [+] Added {new_holidays} Public Holidays for {org.name}")
 
+        # 6. Batch Sync Company Policies for Organization
+        existing_policies = {p.title: p for p in db.query(CompanyPolicy).filter(CompanyPolicy.organization_id == org.id).all()}
+        new_policies = 0
+        for p in DEFAULT_COMPANY_POLICIES:
+            if p["title"] not in existing_policies:
+                db.add(CompanyPolicy(
+                    organization_id=org.id,
+                    title=p["title"],
+                    category=p["category"],
+                    content=p["content"],
+                    is_published=True
+                ))
+                new_policies += 1
+
+        if new_policies > 0:
+            print(f"  [+] Added {new_policies} Company Policy Handbooks for {org.name}")
+
         db.commit()
         print("[OK] Multi-Tenant Enterprise HRMS Database seeded successfully!")
     except Exception as e:
@@ -247,3 +287,4 @@ def seed_db() -> None:
 
 if __name__ == "__main__":
     seed_db()
+

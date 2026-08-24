@@ -15,7 +15,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.core.limiter import limiter
-from app.routers import auth, employees, attendance, leaves, settings as office_settings, dashboard, reports
+from app.routers import auth, employees, attendance, leaves, settings as office_settings, dashboard, reports, assistant
 from app.seed import seed_db
 
 logger = logging.getLogger("aurawork")
@@ -175,6 +175,7 @@ app.include_router(leaves.router, prefix=settings.API_V1_STR)
 app.include_router(office_settings.router, prefix=settings.API_V1_STR)
 app.include_router(dashboard.router, prefix=settings.API_V1_STR)
 app.include_router(reports.router, prefix=settings.API_V1_STR)
+app.include_router(assistant.router, prefix=settings.API_V1_STR)
 
 # Serve uploaded profile images
 app.mount("/api/static", StaticFiles(directory=settings.UPLOAD_DIR), name="static")

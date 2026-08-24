@@ -31,6 +31,7 @@ class Organization(Base):
     attendances = relationship("Attendance", back_populates="organization", cascade="all, delete-orphan")
     leave_requests = relationship("LeaveRequest", back_populates="organization", cascade="all, delete-orphan")
     correction_requests = relationship("AttendanceCorrectionRequest", back_populates="organization", cascade="all, delete-orphan")
+    policies = relationship("CompanyPolicy", back_populates="organization", cascade="all, delete-orphan")
 
 class User(Base):
     __tablename__ = "users"
@@ -252,3 +253,22 @@ class AttendanceCorrectionRequest(Base):
     # Relationships
     organization = relationship("Organization", back_populates="correction_requests")
     user = relationship("User", back_populates="correction_requests", foreign_keys=[user_id])
+
+class CompanyPolicy(Base):
+    __tablename__ = "company_policies"
+    __table_args__ = (
+        Index("ix_policy_org_cat", "organization_id", "category"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String, nullable=False)
+    category = Column(String, default="General", index=True)  # "Leaves", "Attendance", "Benefits", "Code of Conduct", "General"
+    content = Column(Text, nullable=False)
+    is_published = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    # Relationships
+    organization = relationship("Organization", back_populates="policies")
+

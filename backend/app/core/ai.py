@@ -185,14 +185,31 @@ Company Policy Documents:
             reply = f"There are no upcoming company holidays scheduled at the moment in **{company_name}**."
         return {"reply": reply, "sources": ["Company Holiday Calendar"]}
 
-    # D. Match Policy Documents Content
+    # D. Match Policy Documents Content (Ranked TF-IDF Weighted Keyword Scoring)
+    STOP_WORDS = {
+        "policy", "guidelines", "rules", "about", "tell", "what", "where", "when", "which",
+        "with", "from", "have", "this", "that", "your", "their", "will", "shall", "does",
+        "been", "here", "there", "please", "know", "much", "many", "ours", "mine"
+    }
+    msg_words = set(kw for kw in re.findall(r"\w+", msg_lower) if len(kw) > 2) - STOP_WORDS
+
+    best_match = None
+    highest_score = 0
     for pol in policies:
         title = pol.get("title", "")
         content = pol.get("content", "")
-        keywords = re.findall(r"\w+", title.lower())
-        if any(kw in msg_lower for kw in keywords if len(kw) > 3):
-            reply = f"Here is the policy regarding **{title}** at **{company_name}**:\n\n{content}"
-            return {"reply": reply, "sources": [title]}
+        title_keywords = set(kw for kw in re.findall(r"\w+", title.lower()) if len(kw) > 2) - STOP_WORDS
+        content_keywords = set(kw for kw in re.findall(r"\w+", content.lower()) if len(kw) > 2) - STOP_WORDS
+
+        # Title matches weighted 3x, content matches 1x
+        score = (len(msg_words & title_keywords) * 3) + len(msg_words & content_keywords)
+        if score > highest_score and score >= 2:
+            highest_score = score
+            best_match = pol
+
+    if best_match:
+        reply = f"Here is the policy regarding **{best_match.get('title')}** at **{company_name}**:\n\n{best_match.get('content')}"
+        return {"reply": reply, "sources": [best_match.get("title")]}
 
     # E. General Help Fallback
     policies_titles = [f"- {p.get('title')}" for p in policies]

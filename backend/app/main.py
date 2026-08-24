@@ -40,15 +40,15 @@ os.makedirs(os.path.join(settings.UPLOAD_DIR, "selfies"), exist_ok=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Seed database with demo data (development only — never auto-create
-    # default accounts in a real deployment)
-    if settings.ENVIRONMENT == "development":
+    # Startup: Seed database with initial demo data (in development, or when explicitly requested via AUTO_SEED=true)
+    auto_seed = os.getenv("AUTO_SEED", "").lower() in ("true", "1", "yes")
+    if settings.ENVIRONMENT == "development" or auto_seed:
         try:
             seed_db()
         except Exception as e:
             logger.error(f"Failed to run startup database seeder: {e}")
     else:
-        logger.info("Skipping demo data seeding (ENVIRONMENT is not 'development').")
+        logger.info("Skipping demo data seeding (ENVIRONMENT is not 'development' and AUTO_SEED is not set).")
     yield
     # Shutdown logic if needed
 

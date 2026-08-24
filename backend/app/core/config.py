@@ -24,6 +24,8 @@ if not _secret_key:
     )
 
 _database_url = os.getenv("DATABASE_URL", "")
+if _database_url and _database_url.startswith("postgres://"):
+    _database_url = _database_url.replace("postgres://", "postgresql://", 1)
 if not _database_url:
     if _environment == "production":
         raise RuntimeError("DATABASE_URL environment variable is required in production.")
@@ -32,7 +34,10 @@ if not _database_url:
 _redis_url = os.getenv("REDIS_URL", "")
 if not _redis_url:
     if _environment == "production":
-        raise RuntimeError("REDIS_URL environment variable is required in production.")
+        logger.warning(
+            "REDIS_URL not set in production — slowapi rate-limiter will use in-memory fallback. "
+            "Configure an Upstash or Redis instance if running multiple replicas."
+        )
     _redis_url = "redis://localhost:6379/0"
 
 class Settings:

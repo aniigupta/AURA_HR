@@ -1,7 +1,6 @@
 import base64
 import io
 import uuid
-from datetime import timedelta
 import pyotp
 import qrcode
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request, BackgroundTasks

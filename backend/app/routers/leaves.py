@@ -1,7 +1,7 @@
 import uuid
-from datetime import date, datetime
+from datetime import date
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_current_user, RoleChecker

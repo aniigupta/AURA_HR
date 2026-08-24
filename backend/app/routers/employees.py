@@ -1,9 +1,8 @@
 import os
-import shutil
 import uuid
 from datetime import date
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import RoleChecker, get_password_hash, get_current_user

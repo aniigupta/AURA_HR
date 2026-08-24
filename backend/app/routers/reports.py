@@ -2,12 +2,12 @@ import csv
 import io
 from datetime import date, datetime, timedelta
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.core.security import RoleChecker, get_current_user
-from app.models.models import User, Attendance, EmployeeProfile, Department, OfficeSetting
+from app.core.security import RoleChecker
+from app.models.models import User, Attendance, EmployeeProfile, OfficeSetting
 from app.core.utils import get_day_status_for_employee
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill

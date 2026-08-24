@@ -1,7 +1,7 @@
 import uuid
 import jwt
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Union, Any, List
+from typing import Optional, Union, List
 from fastapi import Request, HTTPException, status, Depends
 from fastapi.security import APIKeyCookie
 from passlib.context import CryptContext

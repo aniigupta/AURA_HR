@@ -1,18 +1,17 @@
 import base64
 import os
 import uuid
-from datetime import datetime, date, time, timedelta, timezone
+from datetime import datetime, date, timezone
 from typing import Optional, List
-from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_current_user, RoleChecker
 from app.core.utils import (
-    calculate_haversine_distance, is_wfh_active, log_audit, get_day_status_for_employee, get_safe_timezone,
+    calculate_haversine_distance, is_wfh_active, log_audit, get_safe_timezone,
     validate_image_bytes
 )
-from app.models.models import User, Attendance, BreakSession, OfficeSetting, Holiday, AttendanceCorrectionRequest
+from app.models.models import User, Attendance, BreakSession, OfficeSetting, AttendanceCorrectionRequest
 from app.schemas.schemas import AttendanceOut, ClockInRequest, AttendanceCorrectionCreate, AttendanceCorrectionReview, AttendanceCorrectionOut
 from app.core.config import settings as app_settings
 

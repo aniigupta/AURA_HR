@@ -1,9 +1,9 @@
 import math
 import logging
-from datetime import datetime, date, time, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional, Any
 from sqlalchemy.orm import Session
-from app.models.models import EmployeeProfile, Holiday, OfficeSetting, AuditLog, LeaveRequest, Attendance
+from app.models.models import EmployeeProfile, Holiday, OfficeSetting, AuditLog, LeaveRequest
 
 logger = logging.getLogger("aurawork.audit")
 

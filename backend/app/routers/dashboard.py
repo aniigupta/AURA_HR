@@ -1,13 +1,11 @@
 from datetime import date, datetime, timedelta, timezone
-from typing import Dict, Any, List
-from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, and_
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.security import get_current_user, RoleChecker
 from app.core.utils import get_safe_timezone
-from app.models.models import User, EmployeeProfile, Attendance, LeaveRequest, OfficeSetting, Holiday, AttendanceCorrectionRequest, BreakSession
+from app.models.models import User, Attendance, LeaveRequest, OfficeSetting, AttendanceCorrectionRequest, BreakSession
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard Analytics"])
 

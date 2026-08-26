@@ -60,31 +60,31 @@ export function ToastContainer() {
         <div
           key={t.id}
           className={cn(
-            "flex items-start gap-3 p-4 rounded-xl border shadow-lg animate-in slide-in-from-bottom-5 duration-200 bg-card text-card-foreground pointer-events-auto",
+            "flex items-start gap-3 p-4 rounded-xl border shadow-lg animate-in slide-in-from-bottom-5 duration-200 pointer-events-auto",
             {
-              "border-emerald-200 dark:border-emerald-950/40 bg-emerald-500/5 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-300": t.type === "success",
-              "border-rose-200 dark:border-rose-950/40 bg-rose-500/5 dark:bg-rose-950/20 text-rose-800 dark:text-rose-400": t.type === "error",
-              "border-amber-200 dark:border-amber-950/40 bg-amber-500/5 dark:bg-amber-950/20 text-amber-800 dark:text-amber-300": t.type === "warning",
-              "border-blue-200 dark:border-blue-950/40 bg-blue-500/5 dark:bg-blue-950/20 text-blue-800 dark:text-blue-300": t.type === "info",
+              "border-emerald-200 bg-emerald-50/95 text-emerald-950 shadow-emerald-500/5": t.type === "success",
+              "border-rose-200 bg-rose-50/95 text-rose-950 shadow-rose-500/5": t.type === "error",
+              "border-amber-200 bg-amber-50/95 text-amber-950 shadow-amber-500/5": t.type === "warning",
+              "border-blue-200 bg-blue-50/95 text-blue-950 shadow-blue-500/5": t.type === "info",
             }
           )}
         >
           {/* Icon */}
           <div className="shrink-0 mt-0.5">
-            {t.type === "success" && <CheckCircle2 className="h-5 w-5 text-emerald-500" />}
-            {t.type === "error" && <XCircle className="h-5 w-5 text-rose-500" />}
-            {t.type === "warning" && <AlertTriangle className="h-5 w-5 text-amber-500" />}
-            {t.type === "info" && <Info className="h-5 w-5 text-blue-500" />}
+            {t.type === "success" && <CheckCircle2 className="h-5 w-5 text-emerald-600" />}
+            {t.type === "error" && <XCircle className="h-5 w-5 text-rose-600" />}
+            {t.type === "warning" && <AlertTriangle className="h-5 w-5 text-amber-600" />}
+            {t.type === "info" && <Info className="h-5 w-5 text-blue-600" />}
           </div>
 
           {/* Text Message */}
-          <div className="flex-1 text-sm font-medium leading-relaxed">{t.message}</div>
+          <div className="flex-1 text-sm font-semibold leading-relaxed">{t.message}</div>
 
           {/* Close button */}
           <button
             type="button"
             onClick={() => removeToast(t.id)}
-            className="shrink-0 p-0.5 hover:bg-slate-200 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-slate-600 transition-colors"
+            className="shrink-0 p-1 hover:bg-black/5 rounded-md text-slate-500 hover:text-slate-900 transition-colors"
           >
             <X className="h-4 w-4" />
           </button>

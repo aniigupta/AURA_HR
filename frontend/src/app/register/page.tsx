@@ -11,6 +11,22 @@ import {
   CheckCircle2, ArrowRight, Shield, Globe, Compass, ChevronLeft
 } from "lucide-react";
 
+// The three tiers the backend accepts — Organization.plan is constrained to
+// exactly these by the ^(Starter|Growth|Enterprise)$ pattern on OrganizationCreate.
+// Declared `as const` so p.name stays a literal union and the selector needs no cast.
+type PlanName = "Starter" | "Growth" | "Enterprise";
+
+const PLAN_TIERS: ReadonlyArray<{
+  name: PlanName;
+  limit: string;
+  price: string;
+  badge: string;
+}> = [
+  { name: "Starter", limit: "Up to 25 staff", price: "₹1,499/mo", badge: "Trial" },
+  { name: "Growth", limit: "Up to 75 staff", price: "₹3,999/mo", badge: "Popular" },
+  { name: "Enterprise", limit: "Unlimited staff", price: "₹7,999/mo", badge: "Full Suite" },
+] as const;
+
 export default function RegisterCompanyPage() {
   const { registerCompany } = useAuth();
   const [step, setStep] = useState<1 | 2>(1);
@@ -20,7 +36,7 @@ export default function RegisterCompanyPage() {
   // Form Fields
   const [companyName, setCompanyName] = useState("");
   const [companySlug, setCompanySlug] = useState("");
-  const [plan, setPlan] = useState<"Starter" | "Growth" | "Enterprise">("Starter");
+  const [plan, setPlan] = useState<PlanName>("Starter");
 
   const [adminName, setAdminName] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
@@ -122,22 +138,22 @@ export default function RegisterCompanyPage() {
           <div className="p-3 rounded-2xl bg-indigo-600 text-white mb-3 shadow-md">
             <Sparkles className="h-6 w-6" />
           </div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
-            Aura<span className="text-indigo-600">HR</span> Multi-Tenant Cloud
+          <h1 className="text-2xl sm:text-3xl font-medium tracking-tight text-slate-900">
+            Aura<span className="text-indigo-600 font-semibold">HR</span> Multi-Tenant Cloud
           </h1>
-          <p className="text-sm text-slate-500 mt-1 text-center">
+          <p className="text-sm text-slate-500 mt-1 text-center font-normal">
             Launch your dedicated company HRMS & Attendance workspace in 60 seconds
           </p>
         </div>
 
         {/* Multi-Step Indicator */}
         <div className="flex items-center justify-center gap-3 mb-6">
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold ${step === 1 ? "bg-indigo-600 text-white shadow-sm" : "bg-emerald-100 text-emerald-700"}`}>
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${step === 1 ? "bg-indigo-600 text-white shadow-sm" : "bg-emerald-100 text-emerald-700"}`}>
             {step > 1 ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Building2 className="h-3.5 w-3.5" />}
             1. Company & Plan
           </div>
           <div className="w-6 h-0.5 bg-slate-200" />
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold ${step === 2 ? "bg-indigo-600 text-white shadow-sm" : "bg-slate-100 text-slate-500"}`}>
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${step === 2 ? "bg-indigo-600 text-white shadow-sm" : "bg-slate-100 text-slate-500"}`}>
             <Shield className="h-3.5 w-3.5" />
             2. Admin & Geofence
           </div>
@@ -148,8 +164,8 @@ export default function RegisterCompanyPage() {
           {step === 1 ? (
             <form onSubmit={handleNext} className="space-y-4">
               <CardHeader className="p-0 pb-3">
-                <CardTitle className="text-lg text-slate-900 font-bold">Step 1: Your Organization Details</CardTitle>
-                <CardDescription className="text-xs text-slate-500">
+                <CardTitle className="text-lg text-slate-900 font-medium">Step 1: Your Organization Details</CardTitle>
+                <CardDescription className="text-xs text-slate-500 font-normal">
                   Enter your company branding and choose a subscription tier.
                 </CardDescription>
               </CardHeader>
@@ -165,40 +181,36 @@ export default function RegisterCompanyPage() {
                 />
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
                     Dedicated Workspace URL
                   </label>
                   <div className="flex items-center rounded-lg border border-slate-300 focus-within:ring-2 focus-within:ring-indigo-500 overflow-hidden bg-slate-50">
-                    <span className="px-3 text-xs text-slate-400 font-medium">https://</span>
+                    <span className="px-3 text-xs text-slate-400 font-normal">https://</span>
                     <input
                       type="text"
                       placeholder="acme-tech"
                       value={companySlug}
                       onChange={(e) => setCompanySlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-                      className="flex-1 py-2 text-xs font-semibold text-slate-800 bg-transparent focus:outline-none"
+                      className="flex-1 py-2 text-xs font-medium text-slate-800 bg-transparent focus:outline-none"
                       required
                     />
-                    <span className="px-3 text-xs text-indigo-600 font-bold bg-indigo-50/50 py-2 border-l border-slate-200">
+                    <span className="px-3 text-xs text-indigo-600 font-medium bg-indigo-50/50 py-2 border-l border-slate-200">
                       .aurahr.in
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-1">Unique tenant identifier used for secure isolated database scoping.</p>
+                  <p className="text-[11px] text-slate-400 mt-1 font-normal">Unique tenant identifier used for secure isolated database scoping.</p>
                 </div>
 
                 {/* Plan Selection */}
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-2">
+                  <label className="block text-xs font-medium text-slate-600 mb-2">
                     Choose Subscription Tier (14-Day Free Trial)
                   </label>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                    {[
-                      { name: "Starter", limit: "Up to 25 staff", price: "₹1,499/mo", badge: "Trial" },
-                      { name: "Growth", limit: "Up to 75 staff", price: "₹3,999/mo", badge: "Popular" },
-                      { name: "Enterprise", limit: "Unlimited staff", price: "₹7,999/mo", badge: "Full Suite" },
-                    ].map((p) => (
+                    {PLAN_TIERS.map((p) => (
                       <div
                         key={p.name}
-                        onClick={() => setPlan(p.name as any)}
+                        onClick={() => setPlan(p.name)}
                         className={`p-3 rounded-xl border cursor-pointer transition-all ${
                           plan === p.name
                             ? "border-indigo-600 bg-indigo-50/50 ring-2 ring-indigo-600/20"
@@ -206,20 +218,20 @@ export default function RegisterCompanyPage() {
                         }`}
                       >
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-slate-900">{p.name}</span>
-                          <span className="text-[10px] font-bold text-indigo-600 bg-indigo-100/70 px-1.5 py-0.5 rounded">
+                          <span className="text-xs font-medium text-slate-900">{p.name}</span>
+                          <span className="text-[10px] font-medium text-indigo-600 bg-indigo-100/70 px-1.5 py-0.5 rounded">
                             {p.badge}
                           </span>
                         </div>
-                        <div className="text-xs font-semibold text-slate-700 mt-1">{p.price}</div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">{p.limit}</div>
+                        <div className="text-xs font-medium text-slate-700 mt-1">{p.price}</div>
+                        <div className="text-[10px] text-slate-400 mt-0.5 font-normal">{p.limit}</div>
                       </div>
                     ))}
                   </div>
                 </div>
 
                 <div className="pt-2">
-                  <Button type="submit" size="lg" className="w-full flex items-center justify-center gap-2 font-semibold">
+                  <Button type="submit" size="lg" className="w-full flex items-center justify-center gap-2 font-medium">
                     Continue to Admin Setup <ArrowRight className="h-4 w-4" />
                   </Button>
                 </div>
@@ -229,8 +241,8 @@ export default function RegisterCompanyPage() {
             <form onSubmit={handleSubmit} className="space-y-4">
               <CardHeader className="p-0 pb-3 flex flex-row items-center justify-between">
                 <div>
-                  <CardTitle className="text-lg text-slate-900 font-bold">Step 2: Administrator & Geofencing</CardTitle>
-                  <CardDescription className="text-xs text-slate-500">
+                  <CardTitle className="text-lg text-slate-900 font-medium">Step 2: Administrator & Geofencing</CardTitle>
+                  <CardDescription className="text-xs text-slate-500 font-normal">
                     Create the primary system owner account and configure office location.
                   </CardDescription>
                 </div>
@@ -239,7 +251,7 @@ export default function RegisterCompanyPage() {
                   variant="ghost"
                   size="sm"
                   onClick={() => setStep(1)}
-                  className="text-xs text-slate-500 hover:text-slate-900 gap-1"
+                  className="text-xs text-slate-500 hover:text-slate-900 gap-1 font-normal"
                 >
                   <ChevronLeft className="h-3.5 w-3.5" /> Back
                 </Button>
@@ -300,7 +312,7 @@ export default function RegisterCompanyPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
                       <MapPin className="h-4 w-4 text-indigo-600" />
-                      <span className="text-xs font-bold text-slate-800">Primary Office Geofence (IST)</span>
+                      <span className="text-xs font-medium text-slate-800">Primary Office Geofence (IST)</span>
                     </div>
                     <Button
                       type="button"
@@ -308,7 +320,7 @@ export default function RegisterCompanyPage() {
                       size="sm"
                       onClick={handleAutoDetectLocation}
                       disabled={isLocating}
-                      className="text-[11px] h-7 gap-1 font-semibold text-indigo-600 bg-white"
+                      className="text-[11px] h-7 gap-1 font-medium text-indigo-600 bg-white"
                     >
                       <Compass className={`h-3 w-3 ${isLocating ? "animate-spin" : ""}`} />
                       {isLocating ? "Detecting GPS..." : "Auto-Detect My GPS"}
@@ -317,32 +329,32 @@ export default function RegisterCompanyPage() {
 
                   <div className="grid grid-cols-3 gap-2">
                     <div>
-                      <label className="text-[10px] font-semibold text-slate-500">Latitude</label>
+                      <label className="text-[10px] font-medium text-slate-500">Latitude</label>
                       <input
                         type="number"
                         step="any"
                         value={latitude}
                         onChange={(e) => setLatitude(parseFloat(e.target.value) || 0)}
-                        className="w-full text-xs font-medium border border-slate-200 rounded-lg p-1.5 bg-white"
+                        className="w-full text-xs font-normal border border-slate-200 rounded-lg p-1.5 bg-white"
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] font-semibold text-slate-500">Longitude</label>
+                      <label className="text-[10px] font-medium text-slate-500">Longitude</label>
                       <input
                         type="number"
                         step="any"
                         value={longitude}
                         onChange={(e) => setLongitude(parseFloat(e.target.value) || 0)}
-                        className="w-full text-xs font-medium border border-slate-200 rounded-lg p-1.5 bg-white"
+                        className="w-full text-xs font-normal border border-slate-200 rounded-lg p-1.5 bg-white"
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] font-semibold text-slate-500">Radius (Meters)</label>
+                      <label className="text-[10px] font-medium text-slate-500">Radius (Meters)</label>
                       <input
                         type="number"
                         value={allowedRadius}
                         onChange={(e) => setAllowedRadius(parseInt(e.target.value) || 100)}
-                        className="w-full text-xs font-medium border border-slate-200 rounded-lg p-1.5 bg-white"
+                        className="w-full text-xs font-normal border border-slate-200 rounded-lg p-1.5 bg-white"
                       />
                     </div>
                   </div>
@@ -352,7 +364,7 @@ export default function RegisterCompanyPage() {
                   <Button
                     type="submit"
                     size="lg"
-                    className="w-full flex items-center justify-center font-semibold bg-indigo-600 hover:bg-indigo-700 text-white"
+                    className="w-full flex items-center justify-center font-medium bg-indigo-600 hover:bg-indigo-700 text-white"
                     disabled={isLoading}
                   >
                     {isLoading ? (
@@ -368,9 +380,9 @@ export default function RegisterCompanyPage() {
 
           {/* Footer Back Link */}
           <div className="mt-4 pt-4 border-t border-slate-100 text-center">
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-slate-500 font-normal">
               Already have an existing organization workspace?{" "}
-              <Link href="/login" className="text-indigo-600 font-semibold hover:underline">
+              <Link href="/login" className="text-indigo-600 font-medium hover:underline">
                 Sign in here
               </Link>
             </p>

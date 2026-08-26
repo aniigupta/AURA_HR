@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/utils/api";
 import { useAuth } from "@/context/AuthContext";
@@ -8,8 +8,9 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, Input, Skeleton, Badge } from "@/components/ui/atoms";
 import { toast } from "@/components/ui/toast";
 import { 
-  MapPin, Clock, CalendarDays, Plus, Trash2, ShieldAlert, ShieldCheck, 
-  BookOpen, Edit3, Sparkles, CheckCircle2, FileText, ChevronRight
+  MapPin, CalendarDays, Plus, Trash2, ShieldAlert, ShieldCheck,
+  BookOpen, Edit3, Sparkles, CheckCircle2, FileText,
+  UploadCloud, Loader2, AlertCircle
 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog } from "@/components/ui/dialog";
@@ -40,6 +41,18 @@ export interface CompanyPolicyData {
   content: string;
   is_published: boolean;
   updated_at?: string;
+}
+
+// What the create/update endpoints accept — CompanyPolicyData minus the
+// server-owned fields. Mirrors CompanyPolicyCreate in backend/app/schemas.
+export type CompanyPolicyPayload = Omit<CompanyPolicyData, "id" | "updated_at">;
+
+export interface DocumentExtractResponse {
+  title: string;
+  suggested_category: string;
+  content: string;
+  filename: string;
+  character_count: number;
 }
 
 function OfficeSettingsForm({ initialData }: { initialData: OfficeSettingsData }) {
@@ -315,6 +328,7 @@ function MfaSecurityCard() {
 
 function CompanyPolicyCard() {
   const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<CompanyPolicyData | null>(null);
   
@@ -323,13 +337,19 @@ function CompanyPolicyCard() {
   const [content, setContent] = useState("");
   const [isPublished, setIsPublished] = useState(true);
 
+  // Document upload & extraction state
+  const [isExtractingDoc, setIsExtractingDoc] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [extractedMeta, setExtractedMeta] = useState<{ filename: string; charCount: number } | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
   const { data: policies = [], isLoading } = useQuery<CompanyPolicyData[]>({
     queryKey: ["companyPolicies"],
     queryFn: () => apiFetch<CompanyPolicyData[]>("/assistant/policies"),
   });
 
   const saveMutation = useMutation({
-    mutationFn: (payload: any) => {
+    mutationFn: (payload: CompanyPolicyPayload) => {
       if (editingPolicy) {
         return apiFetch(`/assistant/policies/${editingPolicy.id}`, {
           method: "PUT",
@@ -360,13 +380,72 @@ function CompanyPolicyCard() {
     }
   });
 
+  const handleDocumentExtract = async (file: File) => {
+    const validExtensions = [".pdf", ".docx", ".txt", ".md", ".markdown"];
+    const ext = file.name.substring(file.name.lastIndexOf(".")).toLowerCase();
+    
+    if (!validExtensions.includes(ext)) {
+      const errorMsg = `Unsupported format "${ext}". Please upload a PDF (.pdf), Word (.docx), or Text (.txt, .md) file.`;
+      setUploadError(errorMsg);
+      toast.error(errorMsg);
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      const errorMsg = "Document exceeds maximum allowed size of 10 MB.";
+      setUploadError(errorMsg);
+      toast.error(errorMsg);
+      return;
+    }
+
+    setIsExtractingDoc(true);
+    setUploadError(null);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await apiFetch<DocumentExtractResponse>("/assistant/policies/extract-document", {
+        method: "POST",
+        body: formData
+      });
+
+      setTitle(res.title);
+      setCategory(res.suggested_category);
+      setContent(res.content);
+      setExtractedMeta({
+        filename: res.filename,
+        charCount: res.character_count
+      });
+      toast.success(`Parsed "${res.filename}" (${res.character_count.toLocaleString()} characters extracted). Review below!`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to extract text from document.";
+      setUploadError(msg);
+      toast.error(msg);
+    } finally {
+      setIsExtractingDoc(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
   const handleOpenCreate = () => {
     setEditingPolicy(null);
     setTitle("");
     setCategory("General");
     setContent("");
     setIsPublished(true);
+    setExtractedMeta(null);
+    setUploadError(null);
     setIsDialogOpen(true);
+  };
+
+  const handleOpenUpload = () => {
+    handleOpenCreate();
+    setTimeout(() => {
+      fileInputRef.current?.click();
+    }, 150);
   };
 
   const handleOpenEdit = (policy: CompanyPolicyData) => {
@@ -375,12 +454,16 @@ function CompanyPolicyCard() {
     setCategory(policy.category);
     setContent(policy.content);
     setIsPublished(policy.is_published);
+    setExtractedMeta(null);
+    setUploadError(null);
     setIsDialogOpen(true);
   };
 
   const handleCloseDialog = () => {
     setIsDialogOpen(false);
     setEditingPolicy(null);
+    setExtractedMeta(null);
+    setUploadError(null);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -399,7 +482,7 @@ function CompanyPolicyCard() {
 
   return (
     <Card className="bg-white border-slate-200 p-4 sm:p-5">
-      <CardHeader className="flex flex-row items-center justify-between p-0 pb-4 border-b border-slate-100">
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-0 pb-4 border-b border-slate-100">
         <div className="flex items-center gap-3">
           <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600 shrink-0">
             <Sparkles className="h-5 w-5" />
@@ -408,18 +491,24 @@ function CompanyPolicyCard() {
             <div className="flex items-center gap-2">
               <CardTitle className="text-xs sm:text-sm font-bold text-slate-900">COMPANY POLICIES & AI KNOWLEDGE BASE</CardTitle>
               <Badge variant="primary" className="text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200">
-                AI Powered
+                RAG Knowledge Base
               </Badge>
             </div>
             <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">
-              Manage workplace handbooks and policy rules. AuraHR AI Assistant answers employee queries directly from these documents.
+              Manage workplace handbooks, benefits, and guidelines. Upload PDF/DOCX files to augment the AI assistant.
             </p>
           </div>
         </div>
-        <Button size="sm" onClick={handleOpenCreate} className="shrink-0 gap-1 font-semibold">
-          <Plus className="h-3.5 w-3.5" />
-          Add Policy
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button size="sm" variant="outline" onClick={handleOpenUpload} className="gap-1.5 font-semibold text-indigo-600 border-indigo-200 hover:bg-indigo-50">
+            <UploadCloud className="h-3.5 w-3.5" />
+            Upload Document
+          </Button>
+          <Button size="sm" onClick={handleOpenCreate} className="gap-1 font-semibold">
+            <Plus className="h-3.5 w-3.5" />
+            Add Policy
+          </Button>
+        </div>
       </CardHeader>
 
       <div className="pt-4">
@@ -429,10 +518,20 @@ function CompanyPolicyCard() {
             <Skeleton className="h-10 w-full" />
           </div>
         ) : policies.length === 0 ? (
-          <div className="text-center py-8 text-slate-400">
-            <BookOpen className="h-8 w-8 mx-auto mb-2 opacity-50" />
-            <p className="text-xs font-semibold">No custom policies configured yet.</p>
-            <p className="text-[11px] text-slate-400 mt-0.5">Click &quot;Add Policy&quot; above to create your first company guideline.</p>
+          <div className="text-center py-10 text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+            <BookOpen className="h-9 w-9 mx-auto mb-2.5 text-indigo-400 opacity-60" />
+            <p className="text-xs font-bold text-slate-700">No policy documents in Knowledge Base yet.</p>
+            <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto">
+              Upload employee handbooks (.pdf, .docx) or create company guidelines to empower the AI Assistant.
+            </p>
+            <div className="flex items-center justify-center gap-2 mt-4">
+              <Button size="sm" variant="outline" onClick={handleOpenUpload} className="gap-1.5 text-xs font-semibold text-indigo-600">
+                <UploadCloud className="h-3.5 w-3.5" /> Upload File
+              </Button>
+              <Button size="sm" onClick={handleOpenCreate} className="gap-1.5 text-xs font-semibold">
+                <Plus className="h-3.5 w-3.5" /> Create Policy
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
@@ -444,11 +543,14 @@ function CompanyPolicyCard() {
                       {p.category}
                     </span>
                     <span className={`text-[10px] font-semibold ${p.is_published ? "text-emerald-600" : "text-amber-600"}`}>
-                      {p.is_published ? "Active" : "Draft"}
+                      {p.is_published ? "Active (AI Indexed)" : "Draft"}
                     </span>
                   </div>
-                  <h4 className="font-bold text-xs text-slate-900 mt-2">{p.title}</h4>
-                  <p className="text-[11px] text-slate-500 mt-1 line-clamp-3 leading-relaxed whitespace-pre-line">
+                  <h4 className="font-bold text-xs text-slate-900 mt-2 flex items-center gap-1.5">
+                    <FileText className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                    {p.title}
+                  </h4>
+                  <p className="text-[11px] text-slate-500 mt-1.5 line-clamp-3 leading-relaxed whitespace-pre-line">
                     {p.content}
                   </p>
                 </div>
@@ -476,63 +578,170 @@ function CompanyPolicyCard() {
         )}
       </div>
 
-      {/* Add / Edit Policy Dialog */}
-      <Dialog isOpen={isDialogOpen} onClose={handleCloseDialog} title={editingPolicy ? "Edit Company Policy" : "Add Policy to AI Knowledge Base"} size="md">
-        <form onSubmit={handleSubmit} className="space-y-3.5">
-          <Input
-            label="Policy Title *"
-            placeholder="e.g. Travel & Daily Food Expense Policy"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            required
-          />
+      {/* Add / Edit / Upload Policy Dialog */}
+      <Dialog 
+        isOpen={isDialogOpen} 
+        onClose={handleCloseDialog} 
+        title={editingPolicy ? "Edit Company Policy" : "Add Policy to AI Knowledge Base"} 
+        size="md"
+      >
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Document Ingestion Drag-and-Drop Area */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-semibold text-slate-700">
+                {editingPolicy ? "Re-upload / Replace Document (Optional)" : "Upload Handbook or Policy Document"}
+              </label>
+              <span className="text-[10px] text-slate-400">PDF, DOCX, TXT, MD (Max 10MB)</span>
+            </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">Policy Category</label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full text-xs font-medium border border-slate-200 rounded-lg p-2 bg-white text-slate-800 focus:ring-2 focus:ring-indigo-500"
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.docx,.doc,.txt,.md"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleDocumentExtract(file);
+              }}
+            />
+
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDragging(true);
+              }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) handleDocumentExtract(file);
+              }}
+              onClick={() => !isExtractingDoc && fileInputRef.current?.click()}
+              className={`p-4 rounded-xl border-2 border-dashed text-center transition-all cursor-pointer ${
+                isDragging 
+                  ? "border-indigo-500 bg-indigo-50/70" 
+                  : isExtractingDoc
+                  ? "border-slate-300 bg-slate-50 cursor-wait"
+                  : "border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30 bg-slate-50/50"
+              }`}
             >
-              <option value="Leaves">Leaves & Time-Off</option>
-              <option value="Attendance">Working Hours & Attendance</option>
-              <option value="Code of Conduct">Code of Conduct & Ethics</option>
-              <option value="Benefits">Reimbursements & Perks</option>
-              <option value="General">General / Operations</option>
-            </select>
+              {isExtractingDoc ? (
+                <div className="flex items-center justify-center gap-2.5 py-2">
+                  <Loader2 className="h-5 w-5 text-indigo-600 animate-spin" />
+                  <div className="text-left">
+                    <p className="text-xs font-bold text-slate-800">Extracting document text & structure...</p>
+                    <p className="text-[10px] text-slate-500">Parsing pages and identifying key policy categories</p>
+                  </div>
+                </div>
+              ) : extractedMeta ? (
+                <div className="flex items-center justify-between gap-3 text-left p-1">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-emerald-100 text-emerald-700 rounded-lg shrink-0">
+                      <CheckCircle2 className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-900 truncate max-w-[280px]">
+                        {extractedMeta.filename}
+                      </p>
+                      <p className="text-[10px] text-emerald-700 font-medium">
+                        Extracted {extractedMeta.charCount.toLocaleString()} characters. Ready to review below.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      fileInputRef.current?.click();
+                    }}
+                    className="h-7 text-xs text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50"
+                  >
+                    Change File
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-1.5">
+                  <UploadCloud className="h-6 w-6 text-indigo-500 mb-1" />
+                  <p className="text-xs font-semibold text-slate-700">
+                    Drag and drop your file here, or <span className="text-indigo-600 underline">browse</span>
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Auto-populates title, category, and markdown content
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {uploadError && (
+              <div className="flex items-center gap-1.5 text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2 mt-1">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{uploadError}</span>
+              </div>
+            )}
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Policy Content / Rules (Markdown Supported) *
-            </label>
-            <textarea
-              rows={6}
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="Paste policy handbook text, eligibility criteria, FAQs, or reimbursement caps..."
-              className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 text-slate-800"
+          <div className="border-t border-slate-100 pt-3 space-y-3.5">
+            <Input
+              label="Policy Title *"
+              placeholder="e.g. Travel & Expense Reimbursement Policy"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
               required
             />
-            <p className="text-[10px] text-slate-400 mt-1">AuraHR AI uses this text to answer employee questions.</p>
-          </div>
 
-          <div className="flex items-center gap-2 pt-1">
-            <input
-              type="checkbox"
-              id="isPub"
-              checked={isPublished}
-              onChange={(e) => setIsPublished(e.target.checked)}
-              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-            />
-            <label htmlFor="isPub" className="text-xs font-medium text-slate-700 cursor-pointer">
-              Publish to Employee AI Assistant immediately
-            </label>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Policy Category</label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="w-full text-xs font-medium border border-slate-200 rounded-lg p-2 bg-white text-slate-800 focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="Leaves">Leaves & Time-Off</option>
+                <option value="Attendance">Working Hours & Attendance</option>
+                <option value="Code of Conduct">Code of Conduct & Ethics</option>
+                <option value="Benefits">Reimbursements & Perks</option>
+                <option value="General">General / Operations</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Policy Content / Rules (Markdown Supported) *
+              </label>
+              <textarea
+                rows={6}
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                placeholder="Paste policy handbook text, eligibility criteria, FAQs, or reimbursement caps..."
+                className="w-full text-xs font-mono p-2.5 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-indigo-500 text-slate-800 leading-relaxed"
+                required
+              />
+              <p className="text-[10px] text-slate-400 mt-1">
+                AuraHR AI answers employee questions directly from this knowledge base content.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                type="checkbox"
+                id="isPub"
+                checked={isPublished}
+                onChange={(e) => setIsPublished(e.target.checked)}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <label htmlFor="isPub" className="text-xs font-medium text-slate-700 cursor-pointer">
+                Publish to Employee AI Assistant immediately
+              </label>
+            </div>
           </div>
 
           <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
             <Button type="button" variant="ghost" size="sm" onClick={handleCloseDialog}>Cancel</Button>
-            <Button type="submit" size="sm" disabled={saveMutation.isPending}>
+            <Button type="submit" size="sm" disabled={saveMutation.isPending || isExtractingDoc}>
               {saveMutation.isPending ? "Saving..." : (editingPolicy ? "Update Policy" : "Save to Knowledge Base")}
             </Button>
           </div>

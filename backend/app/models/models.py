@@ -214,6 +214,12 @@ class OfficeSetting(Base):
     weekends = Column(String, default="Saturday,Sunday")  # Comma-separated list
     timezone = Column(String, default="Asia/Kolkata")
 
+    # Whether employees must submit a selfie to clock in. Default True so
+    # existing tenants keep the behaviour they were configured with; HR can
+    # turn it off per organization where photo capture isn't wanted or isn't
+    # lawful. Admins have always been exempt from the requirement.
+    require_selfie = Column(Boolean, default=True, nullable=False)
+
     # Relationships
     organization = relationship("Organization", back_populates="office_setting")
 

@@ -52,7 +52,7 @@ export function Dialog({
       >
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3 sm:mb-4">
-          <h2 className="text-sm sm:text-base font-semibold tracking-tight text-slate-900">
+          <h2 className="text-sm sm:text-base font-medium tracking-tight text-slate-800">
             {title}
           </h2>
           <button

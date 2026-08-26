@@ -279,6 +279,13 @@ class AttendanceCorrectionOut(BaseModel):
     user: Optional[UserOut] = None
     model_config = ConfigDict(from_attributes=True)
 
+class AttendanceImportResponse(BaseModel):
+    total_rows: int
+    imported_count: int
+    updated_count: int
+    skipped_count: int
+    errors: List[str] = []
+
 # Leave Request Schemas
 class LeaveRequestCreate(BaseModel):
     leave_type: str = Field(..., pattern="^(Casual|Sick|Paid|Unpaid|Emergency)$")
@@ -330,6 +337,7 @@ class OfficeSettingUpdate(BaseModel):
     required_working_hours: Optional[float] = Field(None, ge=1.0, le=24.0)
     weekends: Optional[str] = Field(None, max_length=100)
     timezone: Optional[str] = Field(None, max_length=50)
+    require_selfie: Optional[bool] = None
 
 class OfficeSettingOut(BaseModel):
     id: int
@@ -343,6 +351,7 @@ class OfficeSettingOut(BaseModel):
     required_working_hours: float
     weekends: str
     timezone: str
+    require_selfie: bool = True
     model_config = ConfigDict(from_attributes=True)
 
 # Audit Log Schema
@@ -379,6 +388,13 @@ class CompanyPolicyOut(CompanyPolicyBase):
     created_at: datetime
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+class DocumentExtractResponse(BaseModel):
+    title: str
+    suggested_category: str
+    content: str
+    filename: str
+    character_count: int
 
 # AI Assistant Chat Schemas
 class ChatMessage(BaseModel):

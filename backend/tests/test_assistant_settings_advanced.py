@@ -158,3 +158,96 @@ def test_cross_tenant_assistant_isolation(client, db):
     })
     assert res_delta_chat.status_code == 200
     assert "15%" in res_delta_chat.json()["reply"] or "revenue" in res_delta_chat.json()["reply"].lower()
+
+def test_extract_policy_document_txt_and_md(admin_client):
+    content = "# Workplace Health & Safety Policy\n\nAll team members must follow ergonomic guidelines and report hazards immediately."
+    files = {"file": ("Health_and_Safety_Policy.md", content.encode("utf-8"), "text/markdown")}
+    
+    res = admin_client.post("/api/assistant/policies/extract-document", files=files)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["title"] == "Workplace Health & Safety Policy"
+    assert "ergonomic guidelines" in data["content"]
+    assert data["character_count"] > 20
+    assert data["suggested_category"] in ["General", "Code of Conduct"]
+
+def test_extract_policy_document_pdf(admin_client):
+    import io
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    pdf_buffer = io.BytesIO()
+    p = canvas.Canvas(pdf_buffer, pagesize=letter)
+    p.drawString(100, 750, "Annual Travel and Expense Reimbursement Guidelines")
+    p.drawString(100, 720, "Employees can claim up to INR 2500 per day for intercity travel meals and lodging.")
+    p.showPage()
+    p.save()
+    pdf_bytes = pdf_buffer.getvalue()
+
+    files = {"file": ("Travel_Reimbursement_Policy.pdf", pdf_bytes, "application/pdf")}
+    res = admin_client.post("/api/assistant/policies/extract-document", files=files)
+    assert res.status_code == 200
+    data = res.json()
+    assert "Travel" in data["title"] or "Reimbursement" in data["title"]
+    assert "INR 2500" in data["content"]
+    assert data["suggested_category"] == "Benefits"
+
+def test_extract_policy_document_docx(admin_client):
+    import io
+    import docx
+
+    doc = docx.Document()
+    doc.add_heading("Parental and Maternity Leave Policy", level=1)
+    doc.add_paragraph("New mothers are eligible for 26 consecutive weeks of fully paid maternity leave.")
+    table = doc.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Leave Type"
+    table.cell(0, 1).text = "Duration"
+    table.cell(1, 0).text = "Maternity"
+    table.cell(1, 1).text = "26 Weeks"
+
+    docx_buffer = io.BytesIO()
+    doc.save(docx_buffer)
+    docx_bytes = docx_buffer.getvalue()
+
+    files = {"file": ("Maternity_Leave_Policy.docx", docx_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+    res = admin_client.post("/api/assistant/policies/extract-document", files=files)
+    assert res.status_code == 200
+    data = res.json()
+    assert "Maternity" in data["title"]
+    assert "26 consecutive weeks" in data["content"]
+    assert "Leave Type | Duration" in data["content"] or "Maternity | 26 Weeks" in data["content"]
+    assert data["suggested_category"] == "Leaves"
+
+def test_extract_policy_document_unsupported_extension_rejected(admin_client):
+    files = {"file": ("malicious_file.exe", b"MZbinarycontent", "application/octet-stream")}
+    res = admin_client.post("/api/assistant/policies/extract-document", files=files)
+    assert res.status_code == 400
+    assert "unsupported file format" in res.json()["detail"].lower()
+
+def test_upload_file_direct_policy_creation(admin_client, employee_client):
+    policy_text = "# Gym & Wellness Perk\nEmployees receive $100 monthly wellness allowance for fitness subscriptions."
+    files = {"file": ("Wellness_Perk_Policy.txt", policy_text.encode("utf-8"), "text/plain")}
+    data = {
+        "title": "Corporate Wellness & Gym Benefit",
+        "category": "Benefits",
+        "is_published": "true"
+    }
+
+    res = admin_client.post("/api/assistant/policies/upload-file", files=files, data=data)
+    assert res.status_code == 200
+    policy_id = res.json()["id"]
+    assert res.json()["title"] == "Corporate Wellness & Gym Benefit"
+    assert res.json()["category"] == "Benefits"
+
+    # Verify policy is retrieved in AI Knowledge Base
+    res_list = employee_client.get("/api/assistant/policies")
+    assert res_list.status_code == 200
+    assert any(p["id"] == policy_id for p in res_list.json())
+
+    # Verify employee can query AI Assistant about the uploaded document
+    res_chat = employee_client.post("/api/assistant/chat", json={
+        "message": "What is the policy for gym and wellness perk?"
+    })
+    assert res_chat.status_code == 200
+    reply = res_chat.json()["reply"]
+    assert "$100" in reply or "wellness" in reply.lower() or "gym" in reply.lower()

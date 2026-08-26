@@ -1,8 +1,9 @@
 import csv
 import io
+import uuid
 from datetime import date, datetime, timedelta
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
@@ -388,9 +389,11 @@ def get_payroll_summary_data(db: Session, organization_id: Any, start_date: date
         total_salary = round(working_salary + overtime_pay, 2)
 
         payroll_list.append({
+            "user_id": str(user_id),
             "employee_id": emp_code,
             "name": emp_name,
             "department": dept_name,
+            "designation": emp.designation or "Staff",
             "hourly_rate": round(rate, 2),
             "base_salary": round(base, 2),
             "present_days": present_days,
@@ -597,3 +600,321 @@ def export_payroll_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+# --- Individual Employee Salary Slip (Payslip PDF) Generator ---
+
+def generate_individual_payslip_pdf(
+    db: Session,
+    organization: Any,
+    user_id: Any,
+    start_date: date,
+    end_date: date
+) -> io.BytesIO:
+    """
+    Generates a formal corporate Salary Payslip PDF customized to employee attendance,
+    hours worked, overtime, and statutory deductions for the pay period.
+    """
+    user = db.query(User).options(
+        joinedload(User.profile).joinedload(EmployeeProfile.department)
+    ).filter(
+        User.id == user_id,
+        User.organization_id == organization.id
+    ).first()
+
+    if not user or not user.profile:
+        raise HTTPException(status_code=404, detail="Employee profile not found")
+
+    profile = user.profile
+    dept_name = profile.department.name if profile.department else "General"
+    emp_name = f"{profile.first_name} {profile.last_name}"
+    emp_code = profile.employee_id
+    designation = profile.designation or "Staff"
+    rate = profile.hourly_rate or 0.0
+    base_salary = profile.base_salary or 0.0
+
+    setting = db.query(OfficeSetting).filter(OfficeSetting.organization_id == organization.id).first()
+    if not setting:
+        setting = OfficeSetting(organization_id=organization.id)
+
+    attendances = db.query(Attendance).filter(
+        Attendance.organization_id == organization.id,
+        Attendance.user_id == user_id,
+        Attendance.date >= start_date,
+        Attendance.date <= end_date
+    ).all()
+
+    att_map = {att.date: att for att in attendances}
+    delta = end_date - start_date
+    date_list = [start_date + timedelta(days=i) for i in range(delta.days + 1)]
+
+    present_days = 0
+    wfh_days = 0
+    leave_days = 0
+    absent_days = 0
+    half_days = 0
+    late_days = 0
+    total_hours = 0.0
+    overtime_hours = 0.0
+
+    for d in date_list:
+        if d in att_map:
+            att = att_map[d]
+            total_hours += att.working_hours
+            overtime_hours += (att.overtime_minutes / 60.0)
+            if att.status == "Present":
+                present_days += 1
+            elif att.status == "Late":
+                present_days += 1
+                late_days += 1
+            elif att.status == "Half Day":
+                present_days += 1
+                half_days += 1
+            elif att.status == "Work From Home":
+                wfh_days += 1
+            elif att.status == "Leave":
+                leave_days += 1
+            elif att.status == "Absent":
+                absent_days += 1
+        else:
+            fb = get_day_status_for_employee(db, user_id, d, profile, setting)
+            if fb == "Leave":
+                leave_days += 1
+            elif fb == "Absent":
+                absent_days += 1
+            elif fb == "Work From Home":
+                wfh_days += 1
+
+    working_salary = round(total_hours * rate, 2) if rate > 0 else base_salary
+    effective_ot_rate = rate if rate > 0 else (base_salary / 160.0 if base_salary > 0 else 500.0)
+    overtime_pay = round(overtime_hours * effective_ot_rate * 1.5, 2)
+    gross_earnings = round(working_salary + overtime_pay, 2)
+
+    provident_fund = round(min(gross_earnings * 0.12, 1800.0), 2) if gross_earnings > 15000 else 0.0
+    professional_tax = 200.0 if gross_earnings > 10000 else 0.0
+    total_deductions = round(provident_fund + professional_tax, 2)
+    net_payable = round(max(gross_earnings - total_deductions, 0.0), 2)
+
+    pdf_buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        pdf_buffer,
+        pagesize=letter,
+        rightMargin=25,
+        leftMargin=25,
+        topMargin=25,
+        bottomMargin=25
+    )
+
+    styles = getSampleStyleSheet()
+    primary_color = colors.HexColor("#1E1B4B")
+    accent_color = colors.HexColor("#4F46E5")
+    border_color = colors.HexColor("#CBD5E1")
+    light_bg = colors.HexColor("#F8FAFC")
+
+    title_style = ParagraphStyle(
+        name="SlipTitleStyle",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        textColor=primary_color,
+        spaceAfter=3
+    )
+
+    subtitle_style = ParagraphStyle(
+        name="SlipSubtitleStyle",
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        textColor=accent_color,
+        spaceAfter=12
+    )
+
+    section_header = ParagraphStyle(
+        name="SlipSecHeader",
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        textColor=colors.white,
+        leading=11
+    )
+
+    label_style = ParagraphStyle(
+        name="SlipLabelStyle",
+        fontName="Helvetica-Bold",
+        fontSize=8,
+        textColor=colors.HexColor("#475569"),
+        leading=10
+    )
+
+    val_style = ParagraphStyle(
+        name="SlipValStyle",
+        fontName="Helvetica",
+        fontSize=8,
+        textColor=colors.HexColor("#0F172A"),
+        leading=10
+    )
+
+    story = []
+    org_name = organization.name if organization else "AuraWork Enterprises"
+    period_str = f"{start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}"
+    month_name = start_date.strftime("%B %Y")
+
+    story.append(Paragraph(f"{org_name}", title_style))
+    story.append(Paragraph(f"CORPORATE SALARY PAYSLIP — {month_name.upper()} (INR ₹)", subtitle_style))
+    story.append(Spacer(1, 4))
+
+    # Employee Information Grid
+    emp_info_data = [
+        [
+            Paragraph("Employee Name", label_style), Paragraph(emp_name, val_style),
+            Paragraph("Pay Period", label_style), Paragraph(period_str, val_style)
+        ],
+        [
+            Paragraph("Employee ID", label_style), Paragraph(emp_code, val_style),
+            Paragraph("Designation", label_style), Paragraph(designation, val_style)
+        ],
+        [
+            Paragraph("Department", label_style), Paragraph(dept_name, val_style),
+            Paragraph("Joining Date", label_style), Paragraph(str(profile.join_date or "N/A"), val_style)
+        ],
+        [
+            Paragraph("Hourly Rate", label_style), Paragraph(f"INR {rate:.2f} / hr", val_style),
+            Paragraph("Payment Mode", label_style), Paragraph("Bank Transfer (NEFT/RTGS)", val_style)
+        ]
+    ]
+
+    t_emp = Table(emp_info_data, colWidths=[90, 190, 90, 190])
+    t_emp.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), light_bg),
+        ('BOX', (0,0), (-1,-1), 1, border_color),
+        ('INNERGRID', (0,0), (-1,-1), 0.5, border_color),
+        ('TOPPADDING', (0,0), (-1,-1), 5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+    ]))
+    story.append(t_emp)
+    story.append(Spacer(1, 10))
+
+    # Attendance Metrics Ribbon
+    att_summary_data = [
+        [
+            Paragraph("<b>Total Days</b>", label_style),
+            Paragraph("<b>Present</b>", label_style),
+            Paragraph("<b>WFH</b>", label_style),
+            Paragraph("<b>Paid Leaves</b>", label_style),
+            Paragraph("<b>Absences</b>", label_style),
+            Paragraph("<b>Hours Logged</b>", label_style),
+            Paragraph("<b>Overtime</b>", label_style),
+        ],
+        [
+            Paragraph(f"{len(date_list)}", val_style),
+            Paragraph(f"{present_days} d", val_style),
+            Paragraph(f"{wfh_days} d", val_style),
+            Paragraph(f"{leave_days} d", val_style),
+            Paragraph(f"{absent_days} d", val_style),
+            Paragraph(f"{total_hours:.2f} hrs", val_style),
+            Paragraph(f"{overtime_hours:.2f} hrs", val_style),
+        ]
+    ]
+    t_att = Table(att_summary_data, colWidths=[80, 80, 80, 80, 80, 80, 80])
+    t_att.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#EEF2F6")),
+        ('BACKGROUND', (0,1), (-1,1), colors.white),
+        ('BOX', (0,0), (-1,-1), 1, border_color),
+        ('INNERGRID', (0,0), (-1,-1), 0.5, border_color),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('TOPPADDING', (0,0), (-1,-1), 5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+    ]))
+    story.append(t_att)
+    story.append(Spacer(1, 12))
+
+    # Earnings & Deductions Breakdown Table
+    breakdown_data = [
+        [Paragraph("EARNINGS", section_header), Paragraph("AMOUNT (INR)", section_header), Paragraph("DEDUCTIONS", section_header), Paragraph("AMOUNT (INR)", section_header)],
+        [Paragraph("Working Hours Base Salary", val_style), Paragraph(f"INR {working_salary:.2f}", val_style), Paragraph("Employee Provident Fund (PF)", val_style), Paragraph(f"INR {provident_fund:.2f}", val_style)],
+        [Paragraph(f"Overtime Payout ({overtime_hours:.1f} hrs @ 1.5x)", val_style), Paragraph(f"INR {overtime_pay:.2f}", val_style), Paragraph("Professional Tax (PT)", val_style), Paragraph(f"INR {professional_tax:.2f}", val_style)],
+        [Paragraph("Performance & Attendance Allowance", val_style), Paragraph("INR 0.00", val_style), Paragraph("Income Tax / TDS Deduction", val_style), Paragraph("INR 0.00", val_style)],
+        [Paragraph("<b>TOTAL GROSS EARNINGS</b>", label_style), Paragraph(f"<b>INR {gross_earnings:.2f}</b>", label_style), Paragraph("<b>TOTAL DEDUCTIONS</b>", label_style), Paragraph(f"<b>INR {total_deductions:.2f}</b>", label_style)]
+    ]
+
+    t_breakdown = Table(breakdown_data, colWidths=[190, 90, 190, 90])
+    t_breakdown.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), primary_color),
+        ('BACKGROUND', (0,1), (-1,-2), colors.white),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F1F5F9")),
+        ('BOX', (0,0), (-1,-1), 1, primary_color),
+        ('INNERGRID', (0,0), (-1,-1), 0.5, border_color),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+    ]))
+    story.append(t_breakdown)
+    story.append(Spacer(1, 12))
+
+    # Net Salary Highlight Banner
+    net_data = [[
+        Paragraph(f"<b>NET SALARY PAYABLE: INR ₹{net_payable:,.2f}</b>", ParagraphStyle(
+            name="NetPayStyle", fontName="Helvetica-Bold", fontSize=13, textColor=colors.white, alignment=1
+        ))
+    ]]
+    t_net = Table(net_data, colWidths=[560])
+    t_net.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,-1), accent_color),
+        ('TOPPADDING', (0,0), (-1,-1), 8),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+    ]))
+    story.append(t_net)
+    story.append(Spacer(1, 20))
+
+    # Signatory and Notes
+    sig_data = [
+        [
+            Paragraph("<i>Note: This is a system-generated salary slip and does not require a physical signature.</i><br/>"
+                      f"Generated on {datetime.now().strftime('%d-%b-%Y %H:%M')} UTC | AuraHR Cloud", ParagraphStyle(
+                name="NotesStyle", fontName="Helvetica", fontSize=7, textColor=colors.HexColor("#64748B"), leading=9
+            )),
+            Paragraph("<b>Authorized Signatory</b><br/><br/>_______________________<br/>HR & Finance Dept", ParagraphStyle(
+                name="SigStyle", fontName="Helvetica", fontSize=8, textColor=colors.HexColor("#1E293B"), alignment=2, leading=11
+            ))
+        ]
+    ]
+    t_sig = Table(sig_data, colWidths=[360, 200])
+    t_sig.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+    ]))
+    story.append(t_sig)
+
+    doc.build(story)
+    pdf_buffer.seek(0)
+    return pdf_buffer
+
+@router.get("/payslip/{user_id}/pdf")
+def download_individual_payslip_pdf(
+    user_id: str,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(admin_required)
+):
+    """
+    Downloads an official corporate Salary Payslip PDF for an individual employee.
+    """
+    try:
+        uuid_user_id = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid employee user ID format")
+
+    today = date.today()
+    s_date = start_date or today.replace(day=1)
+    e_date = end_date or today
+
+    pdf_buffer = generate_individual_payslip_pdf(
+        db, admin_user.organization, uuid_user_id, s_date, e_date
+    )
+
+    filename = f"payslip_{user_id}_{s_date}_{e_date}.pdf"
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+

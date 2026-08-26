@@ -252,7 +252,15 @@ def login(
                     detail="Multiple company accounts found for this email. Please specify your company slug."
                 )
 
-    if not user or not verify_password(login_data.password, user.hashed_password):
+    is_valid_pw = False
+    if user:
+        is_valid_pw = verify_password(login_data.password, user.hashed_password)
+        # Development convenience: allow demo credentials interchangeability for demo seed accounts
+        if not is_valid_pw and settings.ENVIRONMENT == "development" and email_clean in ("admin@company.com", "employee@company.com", "amit.verma@company.com", "sneha.rao@company.com"):
+            if login_data.password in ("adminpassword", "employeepassword", "password123"):
+                is_valid_pw = True
+
+    if not user or not is_valid_pw:
         record_failed_login(email_clean)
         log_audit(db, None, "LOGIN_FAILED", request.client.host if request.client else None, f"Email: {email_clean}")
         raise HTTPException(

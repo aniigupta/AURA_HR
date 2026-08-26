@@ -6,18 +6,25 @@ import { useAuth } from "@/context/AuthContext";
 import { Button, Input } from "@/components/ui/atoms";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { toast } from "@/components/ui/toast";
-import { Lock, Mail, ShieldCheck, Sparkles } from "lucide-react";
+import { Lock, Mail, ShieldCheck, Sparkles, Eye, EyeOff, UserCheck, KeyRound } from "lucide-react";
 import { apiFetch, ApiError } from "@/utils/api";
 
 export default function LoginPage() {
   const { login, verifyMfa } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isForgot, setIsForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
   const [mfaToken, setMfaToken] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState("");
+
+  const handleQuickFill = (demoEmail: string, demoPass: string) => {
+    setEmail(demoEmail);
+    setPassword(demoPass);
+    toast.success(`Filled credentials for ${demoEmail}`);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,10 +103,10 @@ export default function LoginPage() {
           <div className="p-2.5 sm:p-3 rounded-2xl bg-indigo-600 text-white mb-2.5 sm:mb-3 shadow-md">
             <Sparkles className="h-5 sm:h-6 w-5 sm:w-6" />
           </div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
-            Aura<span className="text-indigo-600">HR</span>
+          <h1 className="text-xl sm:text-2xl font-medium tracking-tight text-slate-900">
+            Aura<span className="text-indigo-600 font-semibold">HR</span>
           </h1>
-          <p className="text-xs text-slate-500 mt-0.5 sm:mt-1 text-center">
+          <p className="text-xs text-slate-500 mt-0.5 sm:mt-1 text-center font-normal">
             Enterprise Workforce & Attendance Portal
           </p>
         </div>
@@ -109,11 +116,11 @@ export default function LoginPage() {
           {mfaToken ? (
             <>
               <CardHeader className="space-y-1 pb-3 sm:pb-4">
-                <CardTitle className="text-base sm:text-lg text-slate-900 font-bold text-center flex items-center justify-center gap-1.5">
+                <CardTitle className="text-base sm:text-lg text-slate-900 font-medium text-center flex items-center justify-center gap-1.5">
                   <ShieldCheck className="h-4 w-4 text-indigo-600" />
                   Two-Factor Verification
                 </CardTitle>
-                <CardDescription className="text-center text-xs text-slate-500">
+                <CardDescription className="text-center text-xs text-slate-500 font-normal">
                   Enter the 6-digit code from your authenticator app
                 </CardDescription>
               </CardHeader>
@@ -135,7 +142,7 @@ export default function LoginPage() {
                     <Button
                       type="submit"
                       size="lg"
-                      className="w-full flex justify-center font-semibold"
+                      className="w-full flex justify-center font-medium"
                       disabled={isLoading || mfaCode.length !== 6}
                     >
                       {isLoading ? (
@@ -153,7 +160,7 @@ export default function LoginPage() {
                         setMfaCode("");
                         setPassword("");
                       }}
-                      className="w-full text-slate-500"
+                      className="w-full text-slate-500 font-normal"
                       disabled={isLoading}
                     >
                       Back to Sign In
@@ -165,8 +172,8 @@ export default function LoginPage() {
           ) : !isForgot ? (
             <>
               <CardHeader className="space-y-1 pb-3 sm:pb-4">
-                <CardTitle className="text-base sm:text-lg text-slate-900 font-bold text-center">Sign In to Your Account</CardTitle>
-                <CardDescription className="text-center text-xs text-slate-500">
+                <CardTitle className="text-base sm:text-lg text-slate-900 font-medium text-center">Sign In to Your Account</CardTitle>
+                <CardDescription className="text-center text-xs text-slate-500 font-normal">
                   Enter your corporate credentials to access the portal
                 </CardDescription>
               </CardHeader>
@@ -182,21 +189,38 @@ export default function LoginPage() {
                     icon={<Mail className="h-4 w-4" />}
                   />
 
-                  <Input
-                    type="password"
-                    label="Account Password"
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    disabled={isLoading}
-                    icon={<Lock className="h-4 w-4" />}
-                  />
+                  <div className="w-full flex flex-col gap-1">
+                    <label className="text-[11px] sm:text-xs font-medium text-slate-600">
+                      Account Password
+                    </label>
+                    <div className="relative flex items-center w-full">
+                      <div className="absolute left-3 text-slate-400 pointer-events-none flex items-center justify-center">
+                        <Lock className="h-4 w-4" />
+                      </div>
+                      <input
+                        type={showPassword ? "text" : "password"}
+                        className="flex w-full rounded-lg border border-slate-200 bg-white py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors duration-150 disabled:opacity-50 disabled:bg-slate-50 min-h-[36px] sm:min-h-[38px] pl-9 pr-10 font-normal"
+                        placeholder="••••••••"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        disabled={isLoading}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 text-slate-400 hover:text-slate-600 cursor-pointer focus:outline-none"
+                        tabIndex={-1}
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
 
                   <div className="flex justify-end">
                     <button
                       type="button"
                       onClick={() => setIsForgot(true)}
-                      className="text-xs text-indigo-600 hover:underline font-semibold cursor-pointer"
+                      className="text-xs text-indigo-600 hover:underline font-normal cursor-pointer"
                       disabled={isLoading}
                     >
                       Forgot Password?
@@ -206,7 +230,7 @@ export default function LoginPage() {
                   <Button
                     type="submit"
                     size="lg"
-                    className="w-full flex justify-center font-semibold"
+                    className="w-full flex justify-center font-medium"
                     disabled={isLoading}
                   >
                     {isLoading ? (
@@ -216,13 +240,46 @@ export default function LoginPage() {
                     )}
                   </Button>
                 </form>
+
+                {/* Quick-Fill Demo Credentials */}
+                <div className="pt-3 border-t border-slate-100">
+                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mb-2">
+                    <KeyRound className="h-3.5 w-3.5 text-indigo-500" />
+                    <span>Quick Demo Sign-In (Click to Auto-fill):</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleQuickFill("admin@company.com", "adminpassword")}
+                      className="flex flex-col items-start p-2 rounded-lg border border-indigo-100 bg-indigo-50/50 hover:bg-indigo-50 text-left transition-colors cursor-pointer"
+                    >
+                      <span className="text-[11px] font-medium text-indigo-900 flex items-center gap-1">
+                        <UserCheck className="h-3 w-3 text-indigo-600" /> HR Admin
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-mono mt-0.5 truncate w-full font-normal">admin@company.com</span>
+                      <span className="text-[9px] text-indigo-600 font-mono font-normal">pass: adminpassword</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleQuickFill("employee@company.com", "employeepassword")}
+                      className="flex flex-col items-start p-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-left transition-colors cursor-pointer"
+                    >
+                      <span className="text-[11px] font-medium text-slate-800 flex items-center gap-1">
+                        <UserCheck className="h-3 w-3 text-emerald-600" /> Employee
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-mono mt-0.5 truncate w-full font-normal">employee@company.com</span>
+                      <span className="text-[9px] text-emerald-600 font-mono font-normal">pass: employeepassword</span>
+                    </button>
+                  </div>
+                </div>
               </CardContent>
             </>
           ) : (
             <>
               <CardHeader className="space-y-1 pb-3 sm:pb-4">
-                <CardTitle className="text-base sm:text-lg text-slate-900 font-bold text-center">Reset Password</CardTitle>
-                <CardDescription className="text-center text-xs text-slate-500">
+                <CardTitle className="text-base sm:text-lg text-slate-900 font-medium text-center">Reset Password</CardTitle>
+                <CardDescription className="text-center text-xs text-slate-500 font-normal">
                   Enter your email address to receive reset instructions
                 </CardDescription>
               </CardHeader>
@@ -242,7 +299,7 @@ export default function LoginPage() {
                     <Button
                       type="submit"
                       size="lg"
-                      className="w-full flex justify-center font-semibold"
+                      className="w-full flex justify-center font-medium"
                       disabled={isLoading}
                     >
                       {isLoading ? (
@@ -256,7 +313,7 @@ export default function LoginPage() {
                       variant="ghost"
                       size="sm"
                       onClick={() => setIsForgot(false)}
-                      className="w-full text-slate-500"
+                      className="w-full text-slate-500 font-normal"
                       disabled={isLoading}
                     >
                       Back to Sign In
@@ -270,9 +327,9 @@ export default function LoginPage() {
           {/* Register New Tenant / Company Link */}
           {!isForgot && !mfaToken && (
             <div className="mt-3 pt-3 border-t border-slate-100 text-center">
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-500 font-normal">
                 New Organization?{" "}
-                <Link href="/register" className="text-indigo-600 font-semibold hover:underline">
+                <Link href="/register" className="text-indigo-600 font-medium hover:underline">
                   Create Company Workspace
                 </Link>
               </p>

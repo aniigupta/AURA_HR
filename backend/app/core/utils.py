@@ -108,20 +108,21 @@ def log_audit(
 def _failed_login_key(email: str) -> str:
     return f"failed_login:{email.strip().lower()}"
 
+_IN_MEMORY_FAILED_LOGINS: dict = {}
+
 def is_login_locked_out(email: str) -> bool:
     """
     Check whether repeated failed logins have locked out this email.
-    Fails open (returns False) if Redis is unreachable — an infra outage on
-    the rate-limit store should never itself become a login outage.
+    Fails open / in-memory if Redis is unreachable.
     """
     from app.core.limiter import redis_client
     from app.core.config import settings
     try:
         count = redis_client.get(_failed_login_key(email))
         return count is not None and int(count) >= settings.FAILED_LOGIN_LOCKOUT_THRESHOLD
-    except Exception as e:
-        logger.warning(f"Login lockout check failed (Redis unavailable?): {e}")
-        return False
+    except Exception:
+        count = _IN_MEMORY_FAILED_LOGINS.get(email, 0)
+        return count >= settings.FAILED_LOGIN_LOCKOUT_THRESHOLD
 
 def record_failed_login(email: str) -> None:
     """Increment the failed-login counter for an email, with a rolling TTL."""
@@ -132,16 +133,17 @@ def record_failed_login(email: str) -> None:
         count = redis_client.incr(key)
         if count == 1:
             redis_client.expire(key, settings.FAILED_LOGIN_LOCKOUT_SECONDS)
-    except Exception as e:
-        logger.warning(f"Failed to record failed login attempt (Redis unavailable?): {e}")
+    except Exception:
+        _IN_MEMORY_FAILED_LOGINS[email] = _IN_MEMORY_FAILED_LOGINS.get(email, 0) + 1
 
 def clear_failed_logins(email: str) -> None:
     """Reset the failed-login counter for an email after a successful login."""
     from app.core.limiter import redis_client
     try:
         redis_client.delete(_failed_login_key(email))
-    except Exception as e:
-        logger.warning(f"Failed to clear failed login attempts (Redis unavailable?): {e}")
+    except Exception:
+        pass
+    _IN_MEMORY_FAILED_LOGINS.pop(email, None)
 
 def get_day_status_for_employee(db: Session, user_id: Any, check_date: date, profile: EmployeeProfile, settings: OfficeSetting) -> str:
     """

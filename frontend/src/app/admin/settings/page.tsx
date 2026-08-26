@@ -8,7 +8,7 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, Input, Skeleton, Badge } from "@/components/ui/atoms";
 import { toast } from "@/components/ui/toast";
 import { 
-  MapPin, CalendarDays, Plus, Trash2, ShieldAlert, ShieldCheck,
+  MapPin, CalendarDays, Plus, Trash2, ShieldAlert, ShieldCheck, Camera,
   BookOpen, Edit3, Sparkles, CheckCircle2, FileText,
   UploadCloud, Loader2, AlertCircle
 } from "lucide-react";
@@ -25,6 +25,7 @@ export interface OfficeSettingsData {
   lunch_break_hours: number;
   required_working_hours: number;
   weekends: string;
+  require_selfie: boolean;
 }
 
 export interface HolidayData {
@@ -65,6 +66,7 @@ function OfficeSettingsForm({ initialData }: { initialData: OfficeSettingsData }
   const [lunchHrs, setLunchHrs] = useState(initialData.lunch_break_hours.toString());
   const [reqHrs, setReqHrs] = useState(initialData.required_working_hours.toString());
   const [weekendsStr, setWeekendsStr] = useState(initialData.weekends);
+  const [requireSelfie, setRequireSelfie] = useState(initialData.require_selfie);
 
   const updateOfficeMutation = useMutation({
     mutationFn: (payload: unknown) => apiFetch("/settings/office", {
@@ -96,7 +98,8 @@ function OfficeSettingsForm({ initialData }: { initialData: OfficeSettingsData }
       office_end_time: endTime + ":00",
       lunch_break_hours: parseFloat(lunchHrs),
       required_working_hours: parseFloat(reqHrs),
-      weekends: weekendsStr
+      weekends: weekendsStr,
+      require_selfie: requireSelfie
     });
   };
 
@@ -141,6 +144,29 @@ function OfficeSettingsForm({ initialData }: { initialData: OfficeSettingsData }
         <Input label="Lunch Break Duration (Hours) *" type="number" step="0.25" min="0" max="3" value={lunchHrs} onChange={(e) => setLunchHrs(e.target.value)} required />
         <Input label="Mandatory Working Hours *" type="number" step="0.5" min="1" max="16" value={reqHrs} onChange={(e) => setReqHrs(e.target.value)} required />
         <Input label="Designated Weekends *" value={weekendsStr} onChange={(e) => setWeekendsStr(e.target.value)} required placeholder="Saturday,Sunday" />
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
+        <div className="flex items-start gap-2.5">
+          <input
+            type="checkbox"
+            id="requireSelfie"
+            checked={requireSelfie}
+            onChange={(e) => setRequireSelfie(e.target.checked)}
+            className="mt-0.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+          />
+          <div className="min-w-0">
+            <label htmlFor="requireSelfie" className="text-xs font-medium text-slate-700 cursor-pointer flex items-center gap-1.5">
+              <Camera className="h-3.5 w-3.5 text-slate-400" />
+              Require a selfie photo at clock-in
+            </label>
+            <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+              {requireSelfie
+                ? "Employees must capture a photo to punch in. Photos are stored against the attendance record."
+                : "Employees punch in with GPS location only — no photo is captured or stored. Existing photos are unaffected."}
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="flex justify-end pt-2 border-t border-slate-100">

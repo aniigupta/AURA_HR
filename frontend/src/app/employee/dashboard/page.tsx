@@ -50,6 +50,12 @@ interface CorrectionItem {
   status: string;
 }
 
+// Only the part of /settings/office this page acts on. The full shape lives
+// with the admin settings screen that owns editing it.
+interface OfficePolicyData {
+  require_selfie: boolean;
+}
+
 interface ClockInResponse {
   clock_in: string;
   status: string;
@@ -141,6 +147,16 @@ export default function EmployeeDashboard() {
     queryFn: () => apiFetch<CorrectionItem[]>("/attendance/corrections"),
   });
 
+  // HR can switch photo verification off for the whole organization.
+  // Default to requiring it while the setting is still loading: guessing
+  // "required" costs an unnecessary photo, guessing "not required" would send
+  // a clock-in the server rejects.
+  const { data: officePolicy, isLoading: isOfficePolicyLoading } = useQuery<OfficePolicyData>({
+    queryKey: ["officeSettings"],
+    queryFn: () => apiFetch<OfficePolicyData>("/settings/office"),
+  });
+  const requireSelfie = officePolicy?.require_selfie ?? true;
+
   // Mutations
   const clockInMutation = useMutation({
     mutationFn: (body: unknown) =>
@@ -224,11 +240,26 @@ export default function EmployeeDashboard() {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           setIsGpsLoading(false);
-          setPendingCoords({
+          const coords = {
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,
             accuracy: pos.coords.accuracy,
-          });
+          };
+
+          // When the organization has photo verification off, punch in
+          // straight from GPS. Opening the camera would ask for a permission
+          // we have no use for and capture an image nobody wants stored.
+          if (!requireSelfie) {
+            clockInMutation.mutate({
+              latitude: coords.latitude,
+              longitude: coords.longitude,
+              gps_accuracy: coords.accuracy,
+              device_info: navigator.userAgent,
+            });
+            return;
+          }
+
+          setPendingCoords(coords);
           setShowSelfieModal(true);
           setTimeout(() => {
             startCamera();
@@ -383,7 +414,7 @@ export default function EmployeeDashboard() {
               {!clockedIn && (
                 <Button
                   onClick={handleClockIn}
-                  disabled={clockInMutation.isPending || isGpsLoading}
+                  disabled={clockInMutation.isPending || isGpsLoading || isOfficePolicyLoading}
                   size="lg"
                   className="w-full flex gap-2 justify-center"
                 >

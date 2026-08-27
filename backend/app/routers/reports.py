@@ -28,7 +28,7 @@ def get_report_data(
     end_date: Optional[date] = None,
     department_id: Optional[int] = None,
     status_filter: Optional[str] = None,
-    employee_id: Optional[str] = None
+    employee_id: Optional[uuid.UUID] = None
 ) -> List[dict]:
     query = db.query(Attendance).options(
         joinedload(Attendance.user).joinedload(User.profile).joinedload(EmployeeProfile.department)
@@ -83,7 +83,7 @@ def get_reports_summary(
     end_date: Optional[date] = None,
     department_id: Optional[int] = None,
     status_filter: Optional[str] = None,
-    employee_id: Optional[str] = None,
+    employee_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
@@ -95,7 +95,7 @@ def export_csv(
     end_date: Optional[date] = None,
     department_id: Optional[int] = None,
     status_filter: Optional[str] = None,
-    employee_id: Optional[str] = None,
+    employee_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
@@ -134,7 +134,7 @@ def export_excel(
     end_date: Optional[date] = None,
     department_id: Optional[int] = None,
     status_filter: Optional[str] = None,
-    employee_id: Optional[str] = None,
+    employee_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
@@ -200,7 +200,7 @@ def export_pdf(
     end_date: Optional[date] = None,
     department_id: Optional[int] = None,
     status_filter: Optional[str] = None,
-    employee_id: Optional[str] = None,
+    employee_id: Optional[uuid.UUID] = None,
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
@@ -634,7 +634,13 @@ def generate_individual_payslip_pdf(
 
     setting = db.query(OfficeSetting).filter(OfficeSetting.organization_id == organization.id).first()
     if not setting:
+        # Persisted rather than transient — see the note in attendance.clock_out.
+        # get_day_status_for_employee reads setting.weekends for every day with
+        # no attendance record, and that is None on an un-flushed instance.
         setting = OfficeSetting(organization_id=organization.id)
+        db.add(setting)
+        db.commit()
+        db.refresh(setting)
 
     attendances = db.query(Attendance).filter(
         Attendance.organization_id == organization.id,

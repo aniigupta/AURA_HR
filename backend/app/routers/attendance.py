@@ -255,7 +255,14 @@ def clock_out(
 
     settings = db.query(OfficeSetting).filter(OfficeSetting.organization_id == current_user.organization_id).first()
     if not settings:
+        # Must be persisted, not left transient: Column(default=...) only
+        # applies at INSERT, so an un-flushed OfficeSetting() has None for
+        # every configured field and the calculations below crash on it.
+        # Every other call site already commits here.
         settings = OfficeSetting(organization_id=current_user.organization_id)
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
 
     # Calculate total duration in hours
     clock_in_tz = attendance.clock_in if attendance.clock_in.tzinfo else attendance.clock_in.replace(tzinfo=timezone.utc)

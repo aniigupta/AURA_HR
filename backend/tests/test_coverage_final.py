@@ -3,8 +3,9 @@ The last uncovered branches: settings auto-creation on the attendance routes,
 the full status matrix inside correction approval, the empty-filename guards,
 and the development-only login shortcut.
 
-Two of these document defects rather than features — see PAY-B2 (transient
-OfficeSetting) and SEC-016 (the demo-credentials shortcut) below.
+Two of these began as defect documentation and are now regression guards:
+PAY-B2 (the transient OfficeSetting) and SEC-016 (the demo-credentials
+shortcut), both since fixed.
 """
 
 import io
@@ -119,20 +120,16 @@ def test_att_076_clock_in_creates_office_settings_for_a_new_tenant(fresh_tenant,
     assert created.require_selfie is True
 
 
-def test_att_077_clock_out_without_a_settings_row_crashes(fresh_tenant, db):
+def test_att_077_clock_out_without_a_settings_row_succeeds(fresh_tenant, db):
     """
-    ATT-077 / PAY-B2 — KNOWN DEFECT (P1), second instance.
+    ATT-077 / PAY-B2 — regression guard, fixed.
 
-    Clock-out builds a transient OfficeSetting() when the tenant has no row,
-    instead of adding and committing one the way clock-in does. Python-side
-    Column(default=...) only applies at INSERT, so required_working_hours is
-    None on that object and the overtime comparison raises a TypeError, which
-    the global handler turns into a 500.
+    Clock-out used to build a transient OfficeSetting() when the tenant had no
+    row, instead of committing one the way clock-in does. Column(default=...)
+    only applies at INSERT, so office_end_time was None on that object and
+    datetime.combine raised, surfacing as a 500. It now persists the row.
 
-    Reachable whenever the settings row is absent at clock-out time. This test
-    removes it between the two punches to isolate the branch; the same crash
-    is in reports.generate_individual_payslip_pdf. Fix both by committing the
-    row, as clock-in already does.
+    The settings row is deleted between the two punches to reach the branch.
     """
     org = fresh_tenant["org"]
     client = fresh_tenant["client"]
@@ -145,11 +142,10 @@ def test_att_077_clock_out_without_a_settings_row_crashes(fresh_tenant, db):
     db.query(OfficeSetting).filter(OfficeSetting.organization_id == org.id).delete()
     db.commit()
 
-    # TestClient re-raises unhandled exceptions, so the crash surfaces here as
-    # the TypeError itself. Against a real server this is a 500. The first
-    # None field reached is office_end_time, in the datetime.combine call.
-    with pytest.raises(TypeError, match="must be datetime.time, not None"):
-        client.post("/api/attendance/clock-out")
+    res = client.post("/api/attendance/clock-out")
+    assert res.status_code == 200
+    assert res.json()["clock_out"] is not None
+    assert db.query(OfficeSetting).filter(OfficeSetting.organization_id == org.id).first() is not None
 
 
 def test_att_078_an_on_time_arrival_is_recorded_as_present(employee_client, db):
@@ -429,20 +425,20 @@ def test_emp_015_an_employee_cannot_update_a_peers_profile(employee_client, admi
 # --------------------------------------------------------------------------
 
 
-def test_sec_016_development_builds_accept_hardcoded_demo_passwords(client, db, monkeypatch):
+def test_sec_016_no_environment_grants_a_credential_shortcut(client, db, monkeypatch):
     """
-    SEC-016 — KNOWN RISK (P1). Documented, not endorsed.
+    SEC-016 — regression guard, fixed.
 
-    login() contains a development-only shortcut: four seeded email addresses
-    authenticate against any of three hardcoded passwords, bypassing the stored
-    hash entirely. It is gated on ENVIRONMENT == "development", so a correctly
-    configured production deploy is unaffected — but the blast radius if
-    ENVIRONMENT is ever unset or mis-set is a full authentication bypass on
-    named accounts, and ENVIRONMENT defaults to "development" when absent.
+    login() carried a development-only shortcut: four seeded email addresses
+    authenticated against any of three hardcoded passwords, bypassing the
+    stored hash. It was gated on ENVIRONMENT == "development" — but
+    ENVIRONMENT defaults to "development" when unset, so a missing env var was
+    a credential bypass on named accounts.
 
-    Recommended: delete the block and seed the demo accounts with the demo
-    passwords instead, so the seed data carries the convenience rather than the
-    authentication path.
+    Removing it cost nothing: app/seed.py already hashes those exact
+    passwords, so the demo accounts still log in through the normal path. What
+    no longer works is the case that made it a hole — a demo account whose
+    password was changed still accepting the old demo password.
     """
     org = db.query(Organization).first()
     demo = User(
@@ -455,15 +451,21 @@ def test_sec_016_development_builds_accept_hardcoded_demo_passwords(client, db, 
     db.add(demo)
     db.commit()
 
-    monkeypatch.setattr(app_settings, "ENVIRONMENT", "development")
-    res = client.post("/api/auth/login", json={"email": "admin@company.com", "password": "adminpassword"})
-    assert res.status_code == 200, "the shortcut is gone — delete this test with it"
+    for environment in ("development", "production", "staging"):
+        monkeypatch.setattr(app_settings, "ENVIRONMENT", environment)
+        res = client.post(
+            "/api/auth/login", json={"email": "admin@company.com", "password": "adminpassword"}
+        )
+        assert res.status_code == 400, f"credential shortcut is live under ENVIRONMENT={environment}"
+        assert res.json()["detail"] == "Incorrect email or password"
 
-    # The same request outside development is refused, which is the control
-    # that keeps this contained.
-    monkeypatch.setattr(app_settings, "ENVIRONMENT", "production")
-    blocked = client.post("/api/auth/login", json={"email": "admin@company.com", "password": "adminpassword"})
-    assert blocked.status_code == 400
+    # The account's real password still works, in every environment.
+    monkeypatch.setattr(app_settings, "ENVIRONMENT", "development")
+    ok = client.post(
+        "/api/auth/login",
+        json={"email": "admin@company.com", "password": "SomethingCompletelyDifferent1"},
+    )
+    assert ok.status_code == 200
 
 
 def test_auth_047_a_malformed_mfa_token_is_rejected_before_lookup(client):

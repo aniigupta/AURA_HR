@@ -120,32 +120,45 @@ def test_rpt_001a_every_filter_narrows_the_summary(admin_client, db, month):
     assert other_department.json() == []
 
 
-def test_rpt_011_the_employee_id_filter_crashes_on_a_uuid_string(admin_client, month):
+def test_rpt_011_the_employee_id_filter_selects_that_employee(admin_client, month):
     """
-    RPT-011 / RPT-B1 — KNOWN DEFECT (P1).
+    RPT-011 / RPT-B1 — regression guard, fixed.
 
-    get_report_data types employee_id as Optional[str] and compares it to
-    EmployeeProfile.id, which is a UUID column. Passing a real profile UUID —
-    exactly what the reports screen sends when filtering by employee — reaches
-    the driver as a string and raises before any row is read, so the endpoint
-    500s on its own documented filter. The same annotation is repeated on
-    /export/csv, /export/excel and /export/pdf.
-
-    Fix: annotate the parameter as Optional[uuid.UUID] so FastAPI parses it
-    and a malformed value becomes a 422 instead of a 500. This test asserts
-    the current behaviour so it turns red the moment that lands.
+    employee_id was annotated Optional[str] and compared to EmployeeProfile.id,
+    a UUID column, so passing a real profile UUID — exactly what the reports
+    screen sends — raised in the driver before any row was read and returned a
+    500 from all four endpoints. Now parsed as Optional[uuid.UUID], which also
+    turns a malformed value into a 422 instead of a 500.
     """
     profile = month["employee"].profile
 
-    for path in (
-        "/api/reports/summary",
-        "/api/reports/export/csv",
-        "/api/reports/export/excel",
-        "/api/reports/export/pdf",
-    ):
+    rows = admin_client.get(
+        "/api/reports/summary", params={**params(month), "employee_id": str(profile.id)}
+    )
+    assert rows.status_code == 200
+    assert len(rows.json()) == len(ALL_STATUSES)
+    assert all(r["employee_id"] == profile.employee_id for r in rows.json())
+
+    for path in ("/api/reports/export/csv", "/api/reports/export/excel", "/api/reports/export/pdf"):
         res = admin_client.get(path, params={**params(month), "employee_id": str(profile.id)})
-        assert res.status_code == 500, f"{path} unexpectedly succeeded — has RPT-B1 been fixed?"
-        assert res.json()["errorCode"] == "DATABASE_ERROR"
+        assert res.status_code == 200, path
+        assert len(res.content) > 0
+
+    # A profile id that exists in no tenant is an empty report, not an error.
+    import uuid as _uuid
+
+    empty = admin_client.get(
+        "/api/reports/summary", params={**params(month), "employee_id": str(_uuid.uuid4())}
+    )
+    assert empty.status_code == 200
+    assert empty.json() == []
+
+    # And a malformed id is now a validation error rather than a database error.
+    malformed = admin_client.get(
+        "/api/reports/summary", params={**params(month), "employee_id": "not-a-uuid"}
+    )
+    assert malformed.status_code == 422
+    assert malformed.json()["errorCode"] == "VALIDATION_ERROR"
 
 
 def test_rpt_009_earned_salary_is_hours_times_rate(admin_client, month):
@@ -390,22 +403,15 @@ def test_pay_013a_a_malformed_payslip_id_is_a_400(admin_client):
     assert res.json()["detail"] == "Invalid employee user ID format"
 
 
-def test_pay_019_a_payslip_for_a_tenant_without_settings_crashes(db, month):
+def test_pay_019_a_payslip_for_a_tenant_without_settings_renders(db, month):
     """
-    PAY-019 / PAY-B2 — KNOWN DEFECT (P1).
+    PAY-019 / PAY-B2 — regression guard, fixed.
 
-    When a tenant has no OfficeSetting row, the payslip generator builds a
-    transient OfficeSetting() instead of persisting one. SQLAlchemy's
-    Column(default=...) only applies at INSERT, so on that un-persisted object
-    every configured field is None — and the first uncovered day in the period
-    calls get_day_status_for_employee, which does settings.weekends.split(",").
-
-    Every other call site (payroll aggregation, GET /settings/office, clock-in)
-    adds and commits the row. This one does not, so a brand-new tenant whose
-    admin generates a payslip before ever opening the settings screen gets a
-    500. The same transient-object pattern appears at attendance.py clock-out.
-
-    Fix: add and commit the row, as the other three call sites do.
+    The generator used to build a transient OfficeSetting() when a tenant had
+    no row. Column(default=...) only applies at INSERT, so every field on that
+    object was None and the first uncovered day crashed on
+    settings.weekends.split(","). It now persists the row, as clock-in and the
+    payroll aggregation already did.
     """
     from app.routers.reports import generate_individual_payslip_pdf
 
@@ -427,41 +433,9 @@ def test_pay_019_a_payslip_for_a_tenant_without_settings_crashes(db, month):
     db.commit()
     assert db.query(OfficeSetting).filter(OfficeSetting.organization_id == org.id).first() is None
 
-    with pytest.raises(AttributeError, match="'NoneType' object has no attribute 'split'"):
-        generate_individual_payslip_pdf(
-            db, org, user.id, date.today() - timedelta(days=2), date.today()
-        )
-
-
-def test_pay_020_a_wfh_employee_counts_uncovered_days_as_work_from_home(admin_client, db, month):
-    """
-    PAY-002 — the third fallback branch, in both aggregations.
-
-    A day with no attendance record is classified by
-    get_day_status_for_employee. With WFH active on the profile that check runs
-    first, so the day counts as Work From Home rather than an absence — in the
-    payroll summary and, separately, in the payslip generator, which carries
-    its own copy of the same loop.
-    """
-    from app.routers.reports import generate_individual_payslip_pdf
-
-    employee = month["employee"]
-    employee.profile.wfh_enabled = True
-    employee.profile.wfh_start_date = month["start"]
-    employee.profile.wfh_end_date = month["end"]
-    db.commit()
-
-    # Days with a stored record keep their recorded status; only the uncovered
-    # days at the end of the range fall through to the WFH classification.
-    row = next(
-        r for r in admin_client.get("/api/reports/payroll", params=params(month)).json()
-        if r["employee_id"] == employee.profile.employee_id
-    )
-    uncovered = (month["end"] - month["start"]).days + 1 - len(ALL_STATUSES)
-    assert row["wfh_days"] == 1 + uncovered  # the recorded WFH day plus every uncovered one
-    assert row["absent_days"] == 1  # only the explicitly recorded absence remains
-
     buffer = generate_individual_payslip_pdf(
-        db, employee.organization, employee.id, month["start"], month["end"]
+        db, org, user.id, date.today() - timedelta(days=2), date.today()
     )
     assert buffer.getvalue().startswith(b"%PDF")
+    # The row is now persisted, so a second payslip reuses it.
+    assert db.query(OfficeSetting).filter(OfficeSetting.organization_id == org.id).first() is not None

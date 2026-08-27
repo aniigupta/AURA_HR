@@ -252,13 +252,14 @@ def login(
                     detail="Multiple company accounts found for this email. Please specify your company slug."
                 )
 
-    is_valid_pw = False
-    if user:
-        is_valid_pw = verify_password(login_data.password, user.hashed_password)
-        # Development convenience: allow demo credentials interchangeability for demo seed accounts
-        if not is_valid_pw and settings.ENVIRONMENT == "development" and email_clean in ("admin@company.com", "employee@company.com", "amit.verma@company.com", "sneha.rao@company.com"):
-            if login_data.password in ("adminpassword", "employeepassword", "password123"):
-                is_valid_pw = True
+    # The password is the only credential check. There is deliberately no
+    # environment-conditional shortcut here: a previous version let four seeded
+    # demo emails authenticate against any of three hardcoded passwords when
+    # ENVIRONMENT == "development", and ENVIRONMENT defaults to "development"
+    # when unset — so a missing env var was a credential bypass on named
+    # accounts. The demo accounts need no special case: app/seed.py already
+    # hashes those exact passwords, so they authenticate through this path.
+    is_valid_pw = bool(user) and verify_password(login_data.password, user.hashed_password)
 
     if not user or not is_valid_pw:
         record_failed_login(email_clean)

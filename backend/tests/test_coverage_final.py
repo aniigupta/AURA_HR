@@ -168,6 +168,40 @@ def test_att_078_an_on_time_arrival_is_recorded_as_present(employee_client, db):
     assert res.json()["late_minutes"] == 0
 
 
+@pytest.mark.parametrize(
+    "office_end,expect_early",
+    [(time(23, 59), True), (time(0, 1), False)],
+    ids=["left-before-close", "left-after-close"],
+)
+def test_att_085_early_leaving_is_measured_against_the_office_close(
+    employee_client, db, office_end, expect_early
+):
+    """
+    ATT-085 — the early-leaving branch of clock-out, pinned to a fixed office
+    close rather than to whenever the suite happens to run.
+
+    This branch was previously covered only by accident: other tests clock out
+    at the real wall-clock time, so `local_now < office_end_dt` was true only
+    when the suite ran before the seeded 19:00 close. A run after 7pm silently
+    lost the coverage — which is exactly how it was found.
+    """
+    setting = db.query(OfficeSetting).first()
+    setting.office_end_time = office_end
+    db.commit()
+
+    assert employee_client.post(
+        "/api/attendance/clock-in",
+        json={"latitude": setting.latitude, "longitude": setting.longitude, "selfie_base64": selfie()},
+    ).status_code == 200
+
+    res = employee_client.post("/api/attendance/clock-out")
+    assert res.status_code == 200
+    if expect_early:
+        assert res.json()["early_leaving_minutes"] > 0
+    else:
+        assert res.json()["early_leaving_minutes"] == 0
+
+
 # --------------------------------------------------------------------------
 # Correction approval — the full recomputed-status matrix
 # --------------------------------------------------------------------------

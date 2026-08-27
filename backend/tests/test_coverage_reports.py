@@ -439,3 +439,36 @@ def test_pay_019_a_payslip_for_a_tenant_without_settings_renders(db, month):
     assert buffer.getvalue().startswith(b"%PDF")
     # The row is now persisted, so a second payslip reuses it.
     assert db.query(OfficeSetting).filter(OfficeSetting.organization_id == org.id).first() is not None
+
+
+def test_pay_020_a_wfh_employee_counts_uncovered_days_as_work_from_home(admin_client, db, month):
+    """
+    PAY-002 — the third fallback branch, in both aggregations.
+
+    A day with no attendance record is classified by
+    get_day_status_for_employee. With WFH active on the profile that check runs
+    first, so the day counts as Work From Home rather than an absence — in the
+    payroll summary and, separately, in the payslip generator, which carries
+    its own copy of the same loop. That duplication is PAY-B1: two
+    implementations of one rule, which is why this asserts against both.
+    """
+    from app.routers.reports import generate_individual_payslip_pdf
+
+    employee = month["employee"]
+    employee.profile.wfh_enabled = True
+    employee.profile.wfh_start_date = month["start"]
+    employee.profile.wfh_end_date = month["end"]
+    db.commit()
+
+    row = next(
+        r for r in admin_client.get("/api/reports/payroll", params=params(month)).json()
+        if r["employee_id"] == employee.profile.employee_id
+    )
+    uncovered = (month["end"] - month["start"]).days + 1 - len(ALL_STATUSES)
+    assert row["wfh_days"] == 1 + uncovered  # the recorded WFH day plus every uncovered one
+    assert row["absent_days"] == 1  # only the explicitly recorded absence remains
+
+    buffer = generate_individual_payslip_pdf(
+        db, employee.organization, employee.id, month["start"], month["end"]
+    )
+    assert buffer.getvalue().startswith(b"%PDF")

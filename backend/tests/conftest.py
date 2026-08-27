@@ -12,6 +12,33 @@ from app.main import app
 from app.models.models import Organization, User, EmployeeProfile, Department, OfficeSetting
 
 @pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    """
+    slowapi keys its counters on the client IP, and every TestClient request
+    presents the same one. Its storage is process-wide, so without this a test
+    that exhausts the 10/minute login limit leaves every later test in the run
+    getting 429s — which is exactly how an unrelated employee test started
+    failing once the auth suite grew. Clearing between tests keeps the limit
+    testable inside a test without leaking outside it.
+    """
+    from app.core.limiter import limiter
+
+    def clear():
+        for storage in (getattr(limiter, "_storage", None), getattr(limiter, "_fallback_storage", None)):
+            try:
+                if storage is not None:
+                    storage.reset()
+            except Exception:
+                # An unreachable Redis is fine here: the in-memory fallback is
+                # the storage that actually accumulates state in tests.
+                pass
+
+    clear()
+    yield
+    clear()
+
+
+@pytest.fixture(autouse=True)
 def fake_redis(monkeypatch):
     fake = fakeredis.FakeRedis(decode_responses=True)
     monkeypatch.setattr("app.core.limiter.redis_client", fake)

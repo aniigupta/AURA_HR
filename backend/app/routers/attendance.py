@@ -679,7 +679,13 @@ def parse_attendance_file_rows(file_bytes: bytes, filename: str) -> List[Dict[st
 
     parsed_records = []
     for row_num, row in enumerate(raw_rows[1:], start=2):
-        if not any(c is not None and str(c).strip() != "" for c in row):
+        # Defensive only, and currently unreachable: all three readers already
+        # drop blank rows before appending, and the XLSX filter above is
+        # character-identical to this predicate (the CSV and PDF filters are
+        # equivalent for the values they yield). Kept so the builder stays
+        # correct if a reader is ever added or its filter relaxed, and marked
+        # no-cover because no input can exercise it today.
+        if not any(c is not None and str(c).strip() != "" for c in row):  # pragma: no cover
             continue
 
         emp_raw = row[field_map["employee"]] if field_map.get("employee") is not None and field_map["employee"] < len(row) else None

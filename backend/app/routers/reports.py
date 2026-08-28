@@ -3,13 +3,13 @@ import io
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.security import RoleChecker
 from app.models.models import User, Attendance, EmployeeProfile, OfficeSetting
-from app.core.utils import get_day_status_for_employee
+from app.core.utils import DayStatusResolver
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from reportlab.lib import colors
@@ -28,7 +28,8 @@ def get_report_data(
     end_date: Optional[date] = None,
     department_id: Optional[int] = None,
     status_filter: Optional[str] = None,
-    employee_id: Optional[uuid.UUID] = None
+    employee_id: Optional[uuid.UUID] = None,
+    limit: Optional[int] = None
 ) -> List[dict]:
     query = db.query(Attendance).options(
         joinedload(Attendance.user).joinedload(User.profile).joinedload(EmployeeProfile.department)
@@ -47,7 +48,10 @@ def get_report_data(
     if status_filter:
         query = query.filter(Attendance.status == status_filter)
 
-    attendances = query.order_by(Attendance.date.desc()).all()
+    query = query.order_by(Attendance.date.desc())
+    if limit is not None:
+        query = query.limit(limit)
+    attendances = query.all()
 
     report_list = []
     for att in attendances:
@@ -77,6 +81,9 @@ def get_report_data(
         })
     return report_list
 
+DEFAULT_PREVIEW_LIMIT = 500
+MAX_PREVIEW_LIMIT = 5000
+
 @router.get("/summary")
 def get_reports_summary(
     start_date: Optional[date] = None,
@@ -84,10 +91,22 @@ def get_reports_summary(
     department_id: Optional[int] = None,
     status_filter: Optional[str] = None,
     employee_id: Optional[uuid.UUID] = None,
+    limit: int = Query(DEFAULT_PREVIEW_LIMIT, ge=1, le=MAX_PREVIEW_LIMIT),
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
-    return get_report_data(db, admin_user.organization_id, start_date, end_date, department_id, status_filter, employee_id)
+    """
+    On-screen preview of attendance rows, newest first.
+
+    Capped: this fed a table that rendered every row an organization had ever
+    recorded - 8,000 rows measured 2.4 MB and ~2.2s here plus 8,000 DOM rows in
+    the browser. The CSV/Excel/PDF export routes below are uncapped and remain
+    the way to get a complete data set.
+    """
+    return get_report_data(
+        db, admin_user.organization_id, start_date, end_date,
+        department_id, status_filter, employee_id, limit=limit
+    )
 
 @router.get("/export/csv")
 def export_csv(
@@ -325,6 +344,10 @@ def get_payroll_summary_data(db: Session, organization_id: Any, start_date: date
         Attendance.date <= end_date
     ).all()
 
+    # One set of lookups for the whole period instead of two queries per
+    # (employee, missing day) - see DayStatusResolver.
+    day_status = DayStatusResolver(db, organization_id, start_date, end_date, settings)
+
     user_attendance_map: Dict[Any, Dict[date, Attendance]] = {}
     for att in all_attendances:
         if att.user_id not in user_attendance_map:
@@ -376,7 +399,7 @@ def get_payroll_summary_data(db: Session, organization_id: Any, start_date: date
                 elif status_str == "Absent":
                     absent_days += 1
             else:
-                fallback_status = get_day_status_for_employee(db, user_id, d, emp, settings)
+                fallback_status = day_status.status_for(user_id, d, emp)
                 if fallback_status == "Leave":
                     leave_days += 1
                 elif fallback_status == "Absent":
@@ -635,7 +658,7 @@ def generate_individual_payslip_pdf(
     setting = db.query(OfficeSetting).filter(OfficeSetting.organization_id == organization.id).first()
     if not setting:
         # Persisted rather than transient — see the note in attendance.clock_out.
-        # get_day_status_for_employee reads setting.weekends for every day with
+        # DayStatusResolver reads setting.weekends to classify every day with
         # no attendance record, and that is None on an un-flushed instance.
         setting = OfficeSetting(organization_id=organization.id)
         db.add(setting)
@@ -650,6 +673,7 @@ def generate_individual_payslip_pdf(
     ).all()
 
     att_map = {att.date: att for att in attendances}
+    day_status = DayStatusResolver(db, organization.id, start_date, end_date, setting)
     delta = end_date - start_date
     date_list = [start_date + timedelta(days=i) for i in range(delta.days + 1)]
 
@@ -682,7 +706,7 @@ def generate_individual_payslip_pdf(
             elif att.status == "Absent":
                 absent_days += 1
         else:
-            fb = get_day_status_for_employee(db, user_id, d, profile, setting)
+            fb = day_status.status_for(user_id, d, profile)
             if fb == "Leave":
                 leave_days += 1
             elif fb == "Absent":

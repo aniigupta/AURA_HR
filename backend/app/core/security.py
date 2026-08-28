@@ -5,7 +5,7 @@ from typing import Optional, Union, List
 from fastapi import Request, HTTPException, status, Depends
 from fastapi.security import APIKeyCookie
 from passlib.context import CryptContext
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.models import User
@@ -119,7 +119,13 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
         
-    user = db.query(User).filter(User.id == user_uuid).first()
+    # organization is read a few lines down for the suspended-tenant check, and
+    # profile is read by most callers, so pull all three in one round trip
+    # instead of lazy-loading them on every authenticated request.
+    user = db.query(User).options(
+        joinedload(User.organization),
+        joinedload(User.profile),
+    ).filter(User.id == user_uuid).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

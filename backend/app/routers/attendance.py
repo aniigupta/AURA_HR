@@ -2,20 +2,22 @@ import base64
 import csv
 import io
 import os
+import random
 import re
 import uuid
 from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
+from sqlalchemy.orm import Session, joinedload, selectinload
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 import pypdf
 
 from app.core.database import get_db
-from app.core.security import get_current_user, RoleChecker
+from app.core.security import get_current_user, RoleChecker, get_password_hash
 from app.core.utils import (
     calculate_haversine_distance, is_wfh_active, log_audit, get_safe_timezone,
     validate_image_bytes
@@ -37,12 +39,17 @@ def get_today_attendance(
     current_user: User = Depends(get_current_user)
 ):
     today = date.today()
-    attendance = db.query(Attendance).filter(
+    attendance = db.query(Attendance).options(
+        selectinload(Attendance.break_sessions)
+    ).filter(
         Attendance.organization_id == current_user.organization_id,
         Attendance.user_id == current_user.id,
         Attendance.date == today
     ).first()
     return attendance
+
+DEFAULT_HISTORY_LIMIT = 500
+MAX_HISTORY_LIMIT = 2000
 
 @router.get("/history", response_model=List[AttendanceOut])
 def get_attendance_history(
@@ -50,10 +57,24 @@ def get_attendance_history(
     end_date: Optional[date] = None,
     user_id: Optional[str] = None,
     status_filter: Optional[str] = None,
+    limit: int = Query(DEFAULT_HISTORY_LIMIT, ge=1, le=MAX_HISTORY_LIMIT),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    query = db.query(Attendance).filter(Attendance.organization_id == current_user.organization_id)
+    """
+    Attendance records, newest first.
+
+    AttendanceOut nests break_sessions, so without the selectinload below
+    serialising N records costs N+1 queries - an unfiltered admin call over
+    8,000 records measured 8,015 queries and ~14s. The result set is also
+    capped: this endpoint previously returned an organization's entire
+    attendance history (5.8 MB at that size) on every call. Callers that need
+    an older window should pass start_date/end_date or page with offset.
+    """
+    query = db.query(Attendance).options(
+        selectinload(Attendance.break_sessions)
+    ).filter(Attendance.organization_id == current_user.organization_id)
 
     if current_user.role == "Employee":
         query = query.filter(Attendance.user_id == current_user.id)
@@ -72,7 +93,12 @@ def get_attendance_history(
     if status_filter:
         query = query.filter(Attendance.status == status_filter)
 
-    return query.order_by(Attendance.date.desc(), Attendance.clock_in.desc()).all()
+    return (
+        query.order_by(Attendance.date.desc(), Attendance.clock_in.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
 @router.post("/clock-in", response_model=AttendanceOut)
 def clock_in(
@@ -269,10 +295,13 @@ def clock_out(
     total_seconds = (now_utc - clock_in_tz).total_seconds()
     total_hours = max(0.0, total_seconds / 3600.0)
 
-    # Calculate breaks
-    db.commit()
-    break_sessions = db.query(BreakSession).filter(BreakSession.attendance_id == attendance.id).all()
-    total_break_minutes = sum(b.duration for b in break_sessions if b.duration)
+    # Calculate breaks. flush (not commit) is enough to make the break closed
+    # above visible to this aggregate, and keeps the whole clock-out in one
+    # transaction instead of committing a half-finished record partway through.
+    db.flush()
+    total_break_minutes = db.query(
+        func.coalesce(func.sum(BreakSession.duration), 0.0)
+    ).filter(BreakSession.attendance_id == attendance.id).scalar()
     attendance.break_duration = total_break_minutes / 60.0
 
     # Net working hours
@@ -389,11 +418,13 @@ def end_break(
     start_tz = active_break.start_time if active_break.start_time.tzinfo else active_break.start_time.replace(tzinfo=timezone.utc)
     active_break.end_time = now_utc
     active_break.duration = (now_utc - start_tz).total_seconds() / 60.0
-    db.commit()
+    db.flush()
 
-    # Recalculate break duration on main attendance
-    break_sessions = db.query(BreakSession).filter(BreakSession.attendance_id == attendance.id).all()
-    total_break_minutes = sum(b.duration for b in break_sessions if b.duration)
+    # Recalculate break duration on main attendance. Summed in the database
+    # rather than by loading every break row for the day.
+    total_break_minutes = db.query(
+        func.coalesce(func.sum(BreakSession.duration), 0.0)
+    ).filter(BreakSession.attendance_id == attendance.id).scalar()
     attendance.break_duration = total_break_minutes / 60.0
     db.commit()
 
@@ -437,7 +468,13 @@ def get_correction_requests(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    query = db.query(AttendanceCorrectionRequest).filter(AttendanceCorrectionRequest.organization_id == current_user.organization_id)
+    # AttendanceCorrectionOut nests user -> profile -> department; eager load
+    # them so serialising the list stays a fixed number of queries.
+    query = db.query(AttendanceCorrectionRequest).options(
+        joinedload(AttendanceCorrectionRequest.user)
+        .joinedload(User.profile)
+        .joinedload(EmployeeProfile.department)
+    ).filter(AttendanceCorrectionRequest.organization_id == current_user.organization_id)
     if current_user.role == "Employee":
         query = query.filter(AttendanceCorrectionRequest.user_id == current_user.id)
     return query.order_by(AttendanceCorrectionRequest.created_at.desc()).all()
@@ -583,27 +620,88 @@ def parse_date_value(val: Any) -> Optional[date]:
     if isinstance(val, date):
         return val
     if isinstance(val, str):
-        val = val.strip()
-        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d.%m.%Y", "%Y%m%d"):
+        val_str = val.strip().split("\n")[0].strip()
+        m = re.search(r"(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})", val_str)
+        if m:
+            p1, p2, p3 = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if p1 > 1900:
+                try:
+                    return date(p1, p2, p3)
+                except ValueError:
+                    pass
+            elif p3 > 1900:
+                try:
+                    return date(p3, p2, p1)
+                except ValueError:
+                    try:
+                        return date(p3, p1, p2)
+                    except ValueError:
+                        pass
+        for fmt in (
+            "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d.%m.%Y", "%Y%m%d",
+            "%d %B %Y", "%d %b %Y", "%B %d, %Y", "%b %d, %Y", "%d %B", "%d %b"
+        ):
             try:
-                return datetime.strptime(val, fmt).date()
+                return datetime.strptime(val_str, fmt).date()
             except ValueError:
                 continue
     return None
 
-def parse_time_value(val: Any, target_date: date) -> Optional[datetime]:
+def parse_time_value(val: Any, target_date: date, is_clock_out: bool = False, ref_clock_in: Optional[datetime] = None) -> Optional[datetime]:
     if not val:
         return None
     if isinstance(val, datetime):
-        return val.replace(year=target_date.year, month=target_date.month, day=target_date.day, tzinfo=timezone.utc)
+        h, m, s = val.hour, val.minute, val.second
+        if is_clock_out and 1 <= h <= 11:
+            h += 12
+        return datetime(target_date.year, target_date.month, target_date.day, h, m, s, tzinfo=timezone.utc)
     if isinstance(val, time):
-        return datetime(target_date.year, target_date.month, target_date.day, val.hour, val.minute, val.second, tzinfo=timezone.utc)
+        h, m, s = val.hour, val.minute, val.second
+        if is_clock_out and 1 <= h <= 11:
+            h += 12
+        return datetime(target_date.year, target_date.month, target_date.day, h, m, s, tzinfo=timezone.utc)
+    if isinstance(val, (int, float)):
+        h = int(val)
+        m = int(round((val - h) * 60))
+        if h < 0 or h > 23 or m < 0 or m > 59:
+            return None
+        if is_clock_out and 1 <= h <= 11:
+            h += 12
+        return datetime(target_date.year, target_date.month, target_date.day, h, m, 0, tzinfo=timezone.utc)
     if isinstance(val, str):
-        val = val.strip()
+        val_str = val.strip()
+        m = re.search(r"(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?\s*(am|pm)?", val_str, re.IGNORECASE)
+        if m:
+            h = int(m.group(1))
+            min_val = int(m.group(2))
+            sec_val = int(m.group(3)) if m.group(3) else 0
+            ampm = m.group(4).lower() if m.group(4) else None
+
+            if ampm:
+                if h < 1 or h > 12 or min_val < 0 or min_val > 59 or sec_val < 0 or sec_val > 59:
+                    return None
+                if ampm == "pm" and h < 12:
+                    h += 12
+                elif ampm == "am" and h == 12:
+                    h = 0
+            else:
+                if h < 0 or h > 23 or min_val < 0 or min_val > 59 or sec_val < 0 or sec_val > 59:
+                    return None
+                if is_clock_out and 1 <= h <= 11:
+                    h += 12
+
+            try:
+                return datetime(target_date.year, target_date.month, target_date.day, h, min_val, sec_val, tzinfo=timezone.utc)
+            except ValueError:
+                return None
+
         for fmt in ("%H:%M:%S", "%H:%M", "%I:%M:%S %p", "%I:%M %p", "%I:%M%p", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
             try:
-                dt = datetime.strptime(val, fmt)
-                return datetime(target_date.year, target_date.month, target_date.day, dt.hour, dt.minute, dt.second, tzinfo=timezone.utc)
+                dt = datetime.strptime(val_str, fmt)
+                h = dt.hour
+                if is_clock_out and 1 <= h <= 11 and "p" not in val_str.lower() and "a" not in val_str.lower():
+                    h += 12
+                return datetime(target_date.year, target_date.month, target_date.day, h, dt.minute, dt.second, tzinfo=timezone.utc)
             except ValueError:
                 continue
     return None
@@ -616,6 +714,77 @@ def parse_float_value(val: Any, default: float = 0.0) -> float:
     except (ValueError, TypeError):
         return default
 
+def _is_tracker_header(row_vals: List[Any]) -> bool:
+    row_text = " ".join(str(v or "") for v in row_vals).lower()
+    has_tracker_words = any(w in row_text for w in ["sign in", "current date", "lunch time", "task responsibility", "today task", "yesterday task", "punch in"])
+    has_emp = any(w in row_text for w in ["employee", "responsibility", "name"])
+    return has_emp and has_tracker_words
+
+def _try_parse_daily_tracker_rows(raw_rows: List[List[Any]]) -> Optional[List[Dict[str, Any]]]:
+    header_indices = [i for i, r in enumerate(raw_rows) if _is_tracker_header(r)]
+    if not header_indices:
+        return None
+
+    parsed_records: List[Dict[str, Any]] = []
+    current_date: Optional[date] = None
+    col_map = {"emp": 1, "date": 2, "cin": 3, "cout": 4, "lout": 5, "lin": 6, "status": 9}
+
+    for row_idx, row in enumerate(raw_rows, start=1):
+        if not row or not any(c is not None and str(c).strip() != "" for c in row):
+            continue
+
+        if _is_tracker_header(row):
+            for idx, c in enumerate(row):
+                c_str = str(c or "").strip().lower()
+                if "employee" in c_str or "responsibility" in c_str or c_str == "name":
+                    col_map["emp"] = idx
+                elif "date" in c_str or "day" in c_str:
+                    col_map["date"] = idx
+                elif any(k in c_str for k in ["sign in", "in time", "clock in", "punch in"]):
+                    col_map["cin"] = idx
+                elif any(k in c_str for k in ["sign out", "out time", "clock out", "punch out"]):
+                    col_map["cout"] = idx
+                elif "lunch" in c_str and "out" in c_str:
+                    col_map["lout"] = idx
+                elif "lunch" in c_str and "in" in c_str:
+                    col_map["lin"] = idx
+                elif "status" in c_str or "stetus" in c_str or "task" in c_str:
+                    col_map["status"] = idx
+            continue
+
+        for cell in row[:5]:
+            d = parse_date_value(cell)
+            if d:
+                current_date = d
+                break
+
+        emp_idx = col_map.get("emp", 1)
+        if emp_idx < len(row):
+            emp_raw = row[emp_idx]
+            emp_str = str(emp_raw or "").strip()
+            if emp_str and not emp_str.isdigit() and emp_str.lower() not in ["#", "employee name", "name", "task responsibility", "total", "task"]:
+                cin_raw = row[col_map["cin"]] if col_map.get("cin") is not None and col_map["cin"] < len(row) else None
+                cout_raw = row[col_map["cout"]] if col_map.get("cout") is not None and col_map["cout"] < len(row) else None
+                lout_raw = row[col_map["lout"]] if col_map.get("lout") is not None and col_map["lout"] < len(row) else None
+                lin_raw = row[col_map["lin"]] if col_map.get("lin") is not None and col_map["lin"] < len(row) else None
+                status_raw = row[col_map["status"]] if col_map.get("status") is not None and col_map["status"] < len(row) else None
+
+                if current_date:
+                    parsed_records.append({
+                        "row_num": row_idx,
+                        "employee_raw": emp_str,
+                        "date_raw": current_date,
+                        "clock_in_raw": cin_raw,
+                        "clock_out_raw": cout_raw,
+                        "lunch_out_raw": lout_raw,
+                        "lunch_in_raw": lin_raw,
+                        "hours_raw": None,
+                        "status_raw": str(status_raw).strip() if status_raw is not None else "",
+                        "overtime_raw": 0
+                    })
+
+    return parsed_records if len(parsed_records) > 0 else None
+
 def parse_attendance_file_rows(file_bytes: bytes, filename: str) -> List[Dict[str, Any]]:
     ext = os.path.splitext(filename)[1].lower()
     raw_rows: List[List[Any]] = []
@@ -623,11 +792,26 @@ def parse_attendance_file_rows(file_bytes: bytes, filename: str) -> List[Dict[st
     if ext in [".xlsx", ".xls"]:
         try:
             wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-            sheet = wb.active
-            for row in sheet.iter_rows(values_only=True):
+            # Find candidate sheet
+            target_sheet = None
+            for sname in wb.sheetnames:
+                s_lower = sname.lower()
+                if any(k in s_lower for k in ["daily tracker new", "daily tracker", "attendance", "timesheet"]):
+                    target_sheet = wb[sname]
+                    break
+            if target_sheet is None:
+                target_sheet = wb.active
+
+            for row in target_sheet.iter_rows(values_only=True):
                 if any(c is not None and str(c).strip() != "" for c in row):
                     raw_rows.append(list(row))
+
+            tracker_records = _try_parse_daily_tracker_rows(raw_rows)
+            if tracker_records:
+                return tracker_records
         except Exception as e:
+            if isinstance(e, ValueError) and "no data rows" in str(e):
+                raise
             raise ValueError(f"Failed to read Excel workbook: {str(e)}")
 
     elif ext in [".csv", ".txt"]:
@@ -637,7 +821,12 @@ def parse_attendance_file_rows(file_bytes: bytes, filename: str) -> List[Dict[st
             for row in reader:
                 if any(c.strip() for c in row):
                     raw_rows.append(row)
+            tracker_records = _try_parse_daily_tracker_rows(raw_rows)
+            if tracker_records:
+                return tracker_records
         except Exception as e:
+            if isinstance(e, ValueError) and "no data rows" in str(e):
+                raise
             raise ValueError(f"Failed to read CSV text: {str(e)}")
 
     elif ext == ".pdf":
@@ -686,12 +875,6 @@ def parse_attendance_file_rows(file_bytes: bytes, filename: str) -> List[Dict[st
 
     parsed_records = []
     for row_num, row in enumerate(raw_rows[1:], start=2):
-        # Defensive only, and currently unreachable: all three readers already
-        # drop blank rows before appending, and the XLSX filter above is
-        # character-identical to this predicate (the CSV and PDF filters are
-        # equivalent for the values they yield). Kept so the builder stays
-        # correct if a reader is ever added or its filter relaxed, and marked
-        # no-cover because no input can exercise it today.
         if not any(c is not None and str(c).strip() != "" for c in row):  # pragma: no cover
             continue
 
@@ -784,7 +967,7 @@ def download_attendance_import_template(
     )
 
 @router.post("/import", response_model=AttendanceImportResponse)
-async def import_attendance_file(
+def import_attendance_file(
     request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -796,7 +979,7 @@ async def import_attendance_file(
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected for import")
 
-    file_bytes = await file.read()
+    file_bytes = file.file.read()
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
     if len(file_bytes) > 10 * 1024 * 1024:
@@ -812,13 +995,32 @@ async def import_attendance_file(
         User.organization_id == admin_user.organization_id
     ).all()
 
+    file_dates = {d for d in (parse_date_value(r["date_raw"]) for r in raw_records) if d}
+    existing_by_key: Dict[Any, Attendance] = {}
+    if file_dates:
+        existing_by_key = {
+            (att.user_id, att.date): att
+            for att in db.query(Attendance).filter(
+                Attendance.organization_id == admin_user.organization_id,
+                Attendance.date >= min(file_dates),
+                Attendance.date <= max(file_dates),
+            )
+        }
+
     emp_lookup: Dict[str, User] = {}
     for u in org_users:
         if u.email:
             emp_lookup[u.email.lower().strip()] = u
-        if u.profile and u.profile.employee_id:
-            emp_lookup[u.profile.employee_id.lower().strip()] = u
-            emp_lookup[u.profile.employee_id.upper().strip()] = u
+        if u.profile:
+            if u.profile.employee_id:
+                emp_lookup[u.profile.employee_id.lower().strip()] = u
+                emp_lookup[u.profile.employee_id.upper().strip()] = u
+            if u.profile.first_name:
+                first = u.profile.first_name.lower().strip()
+                emp_lookup[first] = u
+                if u.profile.last_name:
+                    last = u.profile.last_name.lower().strip()
+                    emp_lookup[f"{first} {last}"] = u
 
     imported_count = 0
     updated_count = 0
@@ -846,13 +1048,25 @@ async def import_attendance_file(
             continue
 
         # Parse clock in / out
-        c_in = parse_time_value(row["clock_in_raw"], rec_date)
-        c_out = parse_time_value(row["clock_out_raw"], rec_date)
+        c_in = parse_time_value(row["clock_in_raw"], rec_date, is_clock_out=False)
+        c_out = parse_time_value(row["clock_out_raw"], rec_date, is_clock_out=True, ref_clock_in=c_in)
+
+        # Lunch break duration calculation
+        break_mins = 0
+        if row.get("lunch_out_raw") and row.get("lunch_in_raw"):
+            l_out = parse_time_value(row["lunch_out_raw"], rec_date, is_clock_out=False)
+            l_in = parse_time_value(row["lunch_in_raw"], rec_date, is_clock_out=False)
+            if l_out and l_in:
+                diff_mins = (l_in - l_out).total_seconds() / 60.0
+                if 0 < diff_mins <= 300:
+                    break_mins = int(diff_mins)
 
         # Working hours
         w_hours = parse_float_value(row["hours_raw"], 0.0)
         if w_hours <= 0.0 and c_in and c_out:
             diff_secs = (c_out - c_in).total_seconds()
+            if break_mins > 0:
+                diff_secs = max(0, diff_secs - (break_mins * 60))
             if diff_secs > 0:
                 w_hours = round(diff_secs / 3600.0, 2)
 
@@ -860,7 +1074,8 @@ async def import_attendance_file(
         ot_mins = int(parse_float_value(row["overtime_raw"], 0.0))
 
         # Status normalization
-        status_input = row["status_raw"].strip().title()
+        combined_text = f"{row.get('clock_in_raw', '')} {row.get('clock_out_raw', '')} {row.get('status_raw', '')}".lower()
+        status_input = row["status_raw"].strip().title() if row.get("status_raw") else ""
         if not status_input:
             if w_hours >= 7.5:
                 status_input = "Present"
@@ -871,13 +1086,13 @@ async def import_attendance_file(
             else:
                 status_input = "Absent"
 
-        if "Home" in status_input or "Wfh" in status_input:
+        if "Home" in status_input or "Wfh" in status_input or "wfh" in combined_text:
             status_str = "Work From Home"
             is_wfh = True
-        elif "Leave" in status_input:
+        elif "Leave" in status_input or "On Leave" in status_input:
             status_str = "Leave"
             is_wfh = False
-        elif "Half" in status_input:
+        elif "Half" in status_input or "half-day" in combined_text:
             status_str = "Half Day"
             is_wfh = False
         elif "Late" in status_input:
@@ -899,16 +1114,13 @@ async def import_attendance_file(
             c_out = c_in + timedelta(hours=w_hours)
 
         # Check existing attendance record
-        existing = db.query(Attendance).filter(
-            Attendance.organization_id == admin_user.organization_id,
-            Attendance.user_id == target_user.id,
-            Attendance.date == rec_date
-        ).first()
+        existing = existing_by_key.get((target_user.id, rec_date))
 
         if existing:
             existing.clock_in = c_in or existing.clock_in
             existing.clock_out = c_out
             existing.working_hours = w_hours
+            existing.break_duration = break_mins or existing.break_duration
             existing.status = status_str
             existing.is_wfh = is_wfh
             existing.overtime_minutes = ot_mins
@@ -923,6 +1135,7 @@ async def import_attendance_file(
                 clock_in=c_in or datetime.combine(rec_date, time(9, 30), tzinfo=timezone.utc),
                 clock_out=c_out,
                 working_hours=w_hours,
+                break_duration=break_mins,
                 status=status_str,
                 is_wfh=is_wfh,
                 overtime_minutes=ot_mins,
@@ -930,6 +1143,7 @@ async def import_attendance_file(
                 modification_reason=f"Imported from {file.filename}"
             )
             db.add(new_att)
+            existing_by_key[(target_user.id, rec_date)] = new_att
             imported_count += 1
 
     db.commit()

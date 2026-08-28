@@ -137,9 +137,14 @@ export default function EmployeeDashboard() {
     queryFn: () => apiFetch<EmployeeDashboardData>("/dashboard/employee"),
   });
 
+  // Only the five most recent rows are rendered below, so ask for five rather
+  // than downloading the employee's entire attendance history to discard it.
+  const RECENT_LOG_COUNT = 5;
   const { data: logs = [], isLoading: isLogsLoading } = useQuery<AttendanceLogItem[]>({
-    queryKey: ["employeeAttendanceLogs"],
-    queryFn: () => apiFetch<AttendanceLogItem[]>("/attendance/history"),
+    queryKey: ["employeeAttendanceLogs", RECENT_LOG_COUNT],
+    queryFn: () => apiFetch<AttendanceLogItem[]>("/attendance/history", {
+      params: { limit: RECENT_LOG_COUNT },
+    }),
   });
 
   const { data: corrections = [], isLoading: isCorrectionsLoading } = useQuery<CorrectionItem[]>({
@@ -620,7 +625,7 @@ export default function EmployeeDashboard() {
               </TableCell>
             </TableRow>
           ) : (
-            logs.slice(0, 5).map((log: AttendanceLogItem) => (
+            logs.map((log: AttendanceLogItem) => (
               <TableRow key={log.id}>
                 <TableCell className="font-semibold text-slate-500">{log.date}</TableCell>
                 <TableCell className="font-semibold text-emerald-700">

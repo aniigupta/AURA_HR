@@ -11,6 +11,30 @@ from app.core.security import get_password_hash, create_jwt_token
 from app.main import app
 from app.models.models import Organization, User, EmployeeProfile, Department, OfficeSetting
 
+@pytest.fixture(scope="session", autouse=True)
+def fast_password_hashing():
+    """
+    Drop the bcrypt work factor for the test run only.
+
+    Production uses cost 12, which measures ~456 ms per hash and ~386 ms per
+    verify on this machine. The fixtures below hash two passwords for every
+    test function and the auth tests verify many more, so that setting alone
+    accounted for a large share of a full-suite run. Cost 4 is bcrypt's
+    minimum and keeps the same algorithm and hash format, so everything under
+    test behaves identically - only the deliberate slowness goes away.
+    app/core/security.py is untouched: real password hashing keeps cost 12.
+    """
+    from passlib.context import CryptContext
+    import app.core.security as security_module
+
+    original = security_module.pwd_context
+    security_module.pwd_context = CryptContext(
+        schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=4
+    )
+    yield
+    security_module.pwd_context = original
+
+
 @pytest.fixture(autouse=True)
 def reset_rate_limiter():
     """

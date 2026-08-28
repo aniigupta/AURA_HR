@@ -52,8 +52,14 @@ export interface PayrollSummaryRow {
 
 export default function ReportsAdminPage() {
   const [activeTab, setActiveTab] = useState<string>("logs");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  // Month-to-date by default: the preview table renders every row it receives,
+  // and /reports/summary is a capped preview - the export buttons below remain
+  // the uncapped path to a full data set.
+  const [startDate, setStartDate] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  });
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [departmentId, setDepartmentId] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [employeeId, setEmployeeId] = useState("");

@@ -207,7 +207,7 @@ def delete_company_policy(
 # --- Document Extraction & Direct File Ingestion for RAG ---
 
 @router.post("/policies/extract-document", response_model=DocumentExtractResponse)
-async def extract_policy_document(
+def extract_policy_document(
     file: UploadFile = File(...),
     admin_user: User = Depends(admin_required)
 ):
@@ -215,6 +215,8 @@ async def extract_policy_document(
     Extracts text and metadata from an uploaded .pdf, .docx, .txt, or .md file
     so HR can preview, refine, and edit before saving to the AI Knowledge Base.
     """
+    # Sync on purpose: the parsing/disk/DB work below is blocking, so it
+    # belongs in FastAPI's threadpool rather than on the event loop.
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected for upload")
 
@@ -225,7 +227,7 @@ async def extract_policy_document(
             detail=f"Unsupported file format '{ext}'. Allowed formats: .pdf, .docx, .txt, .md"
         )
 
-    file_bytes = await file.read()
+    file_bytes = file.file.read()
     if len(file_bytes) > MAX_DOC_SIZE_BYTES:
         raise HTTPException(status_code=400, detail="Document exceeds maximum allowed size of 10 MB")
     if len(file_bytes) == 0:
@@ -248,7 +250,7 @@ async def extract_policy_document(
     )
 
 @router.post("/policies/upload-file", response_model=CompanyPolicyOut)
-async def upload_policy_file(
+def upload_policy_file(
     request: Request,
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
@@ -261,6 +263,8 @@ async def upload_policy_file(
     Directly uploads and parses a document file, saving it as a Company Policy
     in the tenant's AI Knowledge Base in one step.
     """
+    # Sync on purpose: the parsing/disk/DB work below is blocking, so it
+    # belongs in FastAPI's threadpool rather than on the event loop.
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected for upload")
 
@@ -271,7 +275,7 @@ async def upload_policy_file(
             detail=f"Unsupported file format '{ext}'. Allowed formats: .pdf, .docx, .txt, .md"
         )
 
-    file_bytes = await file.read()
+    file_bytes = file.file.read()
     if len(file_bytes) > MAX_DOC_SIZE_BYTES:
         raise HTTPException(status_code=400, detail="Document exceeds maximum allowed size of 10 MB")
     if len(file_bytes) == 0:

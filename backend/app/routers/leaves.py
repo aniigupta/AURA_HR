@@ -2,7 +2,7 @@ import uuid
 from datetime import date
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.security import get_current_user, RoleChecker
 from app.core.utils import log_audit, send_email_background
@@ -20,8 +20,14 @@ def get_leaves(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    query = db.query(LeaveRequest).filter(LeaveRequest.organization_id == current_user.organization_id)
-    
+    # LeaveRequestOut nests user -> profile -> department; without eager
+    # loading, serialising N rows costs ~3N queries (300 rows measured 308).
+    query = db.query(LeaveRequest).options(
+        joinedload(LeaveRequest.user)
+        .joinedload(User.profile)
+        .joinedload(EmployeeProfile.department)
+    ).filter(LeaveRequest.organization_id == current_user.organization_id)
+
     if current_user.role == "Employee":
         query = query.filter(LeaveRequest.user_id == current_user.id)
     else:

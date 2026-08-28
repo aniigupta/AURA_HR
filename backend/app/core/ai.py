@@ -36,7 +36,10 @@ def generate_ai_chat_response(
     # 1. Compile context
     policy_texts = []
     matched_sources = []
-    
+
+    # Tokenised once, not re-scanned for every policy in the knowledge base.
+    query_words = [w for w in re.findall(r"\w+", user_message.lower()) if len(w) > 3]
+
     for pol in policies:
         title = pol.get("title", "Policy")
         category = pol.get("category", "General")
@@ -44,8 +47,9 @@ def generate_ai_chat_response(
         policy_texts.append(f"### Policy: {title} (Category: {category})\n{content}\n")
         
         # Check source match
-        query_words = re.findall(r"\w+", user_message.lower())
-        if any(w in title.lower() or w in category.lower() for w in query_words if len(w) > 3):
+        title_lower = title.lower()
+        category_lower = category.lower()
+        if any(w in title_lower or w in category_lower for w in query_words):
             matched_sources.append(title)
 
     policies_block = "\n".join(policy_texts) if policy_texts else "No custom policies uploaded yet."

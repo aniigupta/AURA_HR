@@ -13,10 +13,20 @@ import {
   AlertCircle, ArrowRight, Play, CheckCircle,
   Cake, Building2, UserPlus, FileSpreadsheet
 } from "lucide-react";
-import { 
-  BarChart, Bar, XAxis, YAxis, Tooltip, 
-  ResponsiveContainer, CartesianGrid, AreaChart, Area, Legend 
-} from "recharts";
+import dynamic from "next/dynamic";
+
+// The charting library is ~360 KB of this route's JavaScript - more than a
+// third of the bundle - for two charts that sit below the stat cards. Loading
+// it on demand lets the cards above render without waiting on it.
+const ChartFallback = () => <Skeleton className="w-full h-full" />;
+const DailyAttendanceChart = dynamic(
+  () => import("@/components/DashboardCharts").then((m) => m.DailyAttendanceChart),
+  { ssr: false, loading: ChartFallback }
+);
+const MonthlyTurnoutChart = dynamic(
+  () => import("@/components/DashboardCharts").then((m) => m.MonthlyTurnoutChart),
+  { ssr: false, loading: ChartFallback }
+);
 
 interface NeedsAttentionItem {
   id: string;
@@ -320,21 +330,7 @@ export default function AdminDashboard() {
               {isLoading ? (
                 <Skeleton className="w-full h-full" />
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={data?.graphs?.daily}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="day" stroke="#64748b" fontSize={11} />
-                    <YAxis stroke="#64748b" fontSize={11} />
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: "#ffffff", borderColor: "#e2e8f0", borderRadius: "8px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.1)" }} 
-                      labelStyle={{ color: "#1e293b", fontWeight: "bold", fontSize: 12 }} 
-                    />
-                    <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
-                    <Bar dataKey="present" name="Present" fill="#4f46e5" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="late" name="Late Arrivals" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="wfh" name="Work From Home" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <DailyAttendanceChart data={data?.graphs?.daily} />
               )}
             </CardContent>
           </Card>
@@ -351,24 +347,7 @@ export default function AdminDashboard() {
               {isLoading ? (
                 <Skeleton className="w-full h-full" />
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={data?.graphs?.monthly}>
-                    <defs>
-                      <linearGradient id="colorPresent" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.2}/>
-                        <stop offset="95%" stopColor="#4f46e5" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="month" stroke="#64748b" fontSize={11} />
-                    <YAxis stroke="#64748b" fontSize={11} />
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: "#ffffff", borderColor: "#e2e8f0", borderRadius: "8px", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.1)" }} 
-                      labelStyle={{ color: "#1e293b", fontWeight: "bold", fontSize: 12 }} 
-                    />
-                    <Area type="monotone" dataKey="present" name="Turnout Count" stroke="#4f46e5" strokeWidth={2} fillOpacity={1} fill="url(#colorPresent)" />
-                  </AreaChart>
-                </ResponsiveContainer>
+                <MonthlyTurnoutChart data={data?.graphs?.monthly} />
               )}
             </CardContent>
           </Card>

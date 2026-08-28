@@ -67,8 +67,15 @@ export default function AttendanceAdminPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeTab, setActiveTab] = useState<string>("logs");
   const [search, setSearch] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  // Default to the current month rather than an open-ended range. The date
+  // inputs show this range, so the table's contents always match a window the
+  // admin can see and change - an unfiltered request used to pull every
+  // attendance row the organization had ever recorded.
+  const [startDate, setStartDate] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  });
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [statusFilter, setStatusFilter] = useState("");
   const [selectedRecord, setSelectedRecord] = useState<AttendanceRecordItem | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);

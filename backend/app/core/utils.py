@@ -180,6 +180,71 @@ def get_day_status_for_employee(db: Session, user_id: Any, check_date: date, pro
     # Default is Absent until they Clock In
     return "Absent"
 
+class DayStatusResolver:
+    """
+    Batched equivalent of get_day_status_for_employee.
+
+    That function issues two queries (holidays, then approved leaves) for every
+    (employee, day) pair with no attendance record. Payroll reports call it
+    across every employee for every day of the pay period, so the query count
+    grows as employees x days: a 150-employee month measured 2,222 queries and
+    ~5s for a single /reports/payroll request.
+
+    This resolver runs the same three lookups once for the whole period and
+    answers from memory, so the same report costs a constant number of queries.
+    The decision order below is deliberately identical to
+    get_day_status_for_employee - WFH, then holiday, then weekend, then leave.
+    """
+
+    def __init__(
+        self,
+        db: Session,
+        organization_id: Any,
+        start_date: date,
+        end_date: date,
+        settings: OfficeSetting,
+    ) -> None:
+        self._holiday_dates = {
+            row[0]
+            for row in db.query(Holiday.date).filter(
+                Holiday.organization_id == organization_id,
+                Holiday.date >= start_date,
+                Holiday.date <= end_date,
+            )
+        }
+
+        # Any approved leave that overlaps the period at all, keyed by user.
+        self._leaves_by_user: dict = {}
+        leave_rows = db.query(
+            LeaveRequest.user_id, LeaveRequest.start_date, LeaveRequest.end_date
+        ).filter(
+            LeaveRequest.organization_id == organization_id,
+            LeaveRequest.status == "Approved",
+            LeaveRequest.start_date <= end_date,
+            LeaveRequest.end_date >= start_date,
+        )
+        for user_id, l_start, l_end in leave_rows:
+            self._leaves_by_user.setdefault(user_id, []).append((l_start, l_end))
+
+        weekends = settings.weekends or ""
+        self._weekend_days = {day.strip().lower() for day in weekends.split(",") if day.strip()}
+
+    def status_for(self, user_id: Any, check_date: date, profile: Optional[EmployeeProfile]) -> str:
+        if is_wfh_active(profile, check_date):
+            return "Work From Home"
+
+        if check_date in self._holiday_dates:
+            return "Holiday"
+
+        if check_date.strftime("%A").lower() in self._weekend_days:
+            return "Weekend"
+
+        for l_start, l_end in self._leaves_by_user.get(user_id, ()):
+            if l_start <= check_date <= l_end:
+                return "Leave"
+
+        return "Absent"
+
 def get_safe_timezone(tz_name: Optional[str] = None) -> Any:
     """Return a timezone object, falling back to IST (+05:30) or UTC if tzdata is missing."""
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError

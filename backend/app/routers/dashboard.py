@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, case
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.security import get_current_user, RoleChecker
@@ -8,6 +8,9 @@ from app.core.utils import get_safe_timezone
 from app.models.models import User, Attendance, LeaveRequest, OfficeSetting, AttendanceCorrectionRequest, BreakSession
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard Analytics"])
+
+# Statuses that count as the employee having shown up for the day.
+PRESENT_STATUSES = ["Present", "Late", "Half Day", "Work From Home"]
 
 @router.get("/admin")
 def get_admin_dashboard(
@@ -39,7 +42,7 @@ def get_admin_dashboard(
     half_day_today = 0
     
     for att in today_attendances:
-        if att.status in ["Present", "Late", "Half Day", "Work From Home"]:
+        if att.status in PRESENT_STATUSES:
             present_today += 1
         if att.status == "Late":
             late_today += 1
@@ -71,18 +74,16 @@ def get_admin_dashboard(
     avg_working_hours = round(float(avg_working_hours_query), 2) if avg_working_hours_query else 0.0
 
     # Monthly Attendance Percentage in this organization
-    total_attendance_records = db.query(Attendance).filter(
+    # Both figures come off the same rows, so count them in one pass rather
+    # than scanning the month twice.
+    total_attendance_records, present_records = db.query(
+        func.count(Attendance.id),
+        func.count(case((Attendance.status.in_(PRESENT_STATUSES), 1))),
+    ).filter(
         Attendance.organization_id == org_id,
         Attendance.date >= start_of_month,
         Attendance.date <= today
-    ).count()
-    
-    present_records = db.query(Attendance).filter(
-        Attendance.organization_id == org_id,
-        Attendance.date >= start_of_month,
-        Attendance.date <= today,
-        Attendance.status.in_(["Present", "Late", "Half Day", "Work From Home"])
-    ).count()
+    ).one()
     
     attendance_percentage = 0.0
     if total_attendance_records > 0:
@@ -102,7 +103,7 @@ def get_admin_dashboard(
         day_str = d.strftime("%a")
         
         day_recs = [r for r in last_7_records if r[0] == d]
-        p_count = sum(1 for r in day_recs if r[1] in ["Present", "Late", "Half Day", "Work From Home"])
+        p_count = sum(1 for r in day_recs if r[1] in PRESENT_STATUSES)
         l_count = sum(1 for r in day_recs if r[1] == "Late")
         w_count = sum(1 for r in day_recs if r[2] or r[1] == "Work From Home")
         
@@ -115,29 +116,39 @@ def get_admin_dashboard(
         })
 
     # 3. Monthly Attendance Graph (Last 6 Months) in this organization
-    monthly_graph = []
-    for i in range(5, -1, -1):
-        first_day_of_current_month = today.replace(day=1)
-        target_month_date = first_day_of_current_month - timedelta(days=i*30)
-        target_month_start = target_month_date.replace(day=1)
-        if target_month_start.month == 12:
-            target_month_end = target_month_start.replace(year=target_month_start.year + 1, month=1) - timedelta(days=1)
-        else:
-            target_month_end = target_month_start.replace(month=target_month_start.month + 1) - timedelta(days=1)
-            
-        month_label = target_month_start.strftime("%b %Y")
-        
-        m_present = db.query(Attendance).filter(
-            Attendance.organization_id == org_id,
-            Attendance.date >= target_month_start,
-            Attendance.date <= target_month_end,
-            Attendance.status.in_(["Present", "Late", "Half Day", "Work From Home"])
-        ).count()
-        
-        monthly_graph.append({
-            "month": month_label,
-            "present": m_present
-        })
+    #
+    # The six buckets are stepped back a month at a time. Subtracting 30 days
+    # per step (as this did before) skips a month whenever a 31-day month is
+    # crossed - from 1 March, minus 30 days lands on 30 January, so February
+    # never appeared and January was counted twice.
+    month_starts = []
+    cursor_month = today.replace(day=1)
+    for _ in range(6):
+        month_starts.append(cursor_month)
+        cursor_month = (cursor_month - timedelta(days=1)).replace(day=1)
+    month_starts.reverse()
+
+    # One scan of the six-month window replaces the six separate COUNT queries
+    # this used to run. Bucketing happens in Python so no dialect-specific
+    # date_trunc/strftime is needed.
+    month_counts: dict = {}
+    present_month_rows = db.query(Attendance.date).filter(
+        Attendance.organization_id == org_id,
+        Attendance.date >= month_starts[0],
+        Attendance.date <= today,
+        Attendance.status.in_(PRESENT_STATUSES)
+    ).all()
+    for (rec_date,) in present_month_rows:
+        key = (rec_date.year, rec_date.month)
+        month_counts[key] = month_counts.get(key, 0) + 1
+
+    monthly_graph = [
+        {
+            "month": month_start.strftime("%b %Y"),
+            "present": month_counts.get((month_start.year, month_start.month), 0)
+        }
+        for month_start in month_starts
+    ]
 
     # 4. Action Center (Needs Attention) in this organization
     needs_attention = []
@@ -295,43 +306,35 @@ def get_employee_dashboard(
         Attendance.date == today
     ).first()
 
-    # Calculate Monthly Attendance Percentage for this employee
+    # Attendance percentage and average hours all derive from this employee's
+    # rows for the current month, so gather them in a single pass instead of
+    # three separate scans of the same range.
     start_of_month = today.replace(day=1)
-    total_possible_days = db.query(Attendance).filter(
+    total_possible_days, present_days, avg_working = db.query(
+        func.count(Attendance.id),
+        func.count(case((Attendance.status.in_(PRESENT_STATUSES), 1))),
+        func.avg(case((Attendance.working_hours > 0, Attendance.working_hours))),
+    ).filter(
         Attendance.organization_id == current_user.organization_id,
         Attendance.user_id == current_user.id,
         Attendance.date >= start_of_month,
         Attendance.date <= today
-    ).count()
-    
-    present_days = db.query(Attendance).filter(
-        Attendance.organization_id == current_user.organization_id,
-        Attendance.user_id == current_user.id,
-        Attendance.date >= start_of_month,
-        Attendance.date <= today,
-        Attendance.status.in_(["Present", "Late", "Half Day", "Work From Home"])
-    ).count()
+    ).one()
 
     attendance_percentage = 100.0
     if total_possible_days > 0:
         attendance_percentage = round((present_days / total_possible_days) * 100, 1)
 
-    # Average working hours this month
-    avg_working = db.query(func.avg(Attendance.working_hours)).filter(
-        Attendance.organization_id == current_user.organization_id,
-        Attendance.user_id == current_user.id,
-        Attendance.date >= start_of_month,
-        Attendance.date <= today,
-        Attendance.working_hours > 0
-    ).scalar()
     avg_hours = round(float(avg_working), 2) if avg_working else 0.0
 
     is_on_break = False
     if today_attendance:
-        is_on_break = db.query(BreakSession).filter(
-            BreakSession.attendance_id == today_attendance.id,
-            BreakSession.end_time == None
-        ).count() > 0
+        is_on_break = db.query(
+            db.query(BreakSession).filter(
+                BreakSession.attendance_id == today_attendance.id,
+                BreakSession.end_time == None
+            ).exists()
+        ).scalar()
 
     return {
         "today": {

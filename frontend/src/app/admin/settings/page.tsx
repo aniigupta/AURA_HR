@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, getBackendUrl } from "@/utils/api";
 import { useAuth } from "@/context/AuthContext";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button, Input, Skeleton, Badge } from "@/components/ui/atoms";
+import { Button, Input, Skeleton, Badge, Select } from "@/components/ui/atoms";
 import { toast } from "@/components/ui/toast";
 import { 
   MapPin, CalendarDays, Plus, Trash2, ShieldAlert, ShieldCheck, Camera,
@@ -720,20 +720,18 @@ function CompanyPolicyCard() {
               required
             />
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Policy Category</label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full text-xs font-medium border border-slate-200 rounded-lg p-2 bg-white text-slate-800 focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="Leaves">Leaves & Time-Off</option>
-                <option value="Attendance">Working Hours & Attendance</option>
-                <option value="Code of Conduct">Code of Conduct & Ethics</option>
-                <option value="Benefits">Reimbursements & Perks</option>
-                <option value="General">General / Operations</option>
-              </select>
-            </div>
+            <Select
+              label="Policy Category"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              options={[
+                { label: "Leaves & Time-Off", value: "Leaves" },
+                { label: "Working Hours & Attendance", value: "Attendance" },
+                { label: "Code of Conduct & Ethics", value: "Code of Conduct" },
+                { label: "Reimbursements & Perks", value: "Benefits" },
+                { label: "General / Operations", value: "General" }
+              ]}
+            />
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">

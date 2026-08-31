@@ -6,7 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Button, Input } from "@/components/ui/atoms";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { toast } from "@/components/ui/toast";
-import { Lock, Mail, ShieldCheck, Sparkles, Eye, EyeOff, UserCheck, KeyRound } from "lucide-react";
+import { Lock, Mail, ShieldCheck, Sparkles, Eye, EyeOff } from "lucide-react";
 import { apiFetch, ApiError } from "@/utils/api";
 
 export default function LoginPage() {
@@ -20,11 +20,6 @@ export default function LoginPage() {
   const [mfaToken, setMfaToken] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState("");
 
-  const handleQuickFill = (demoEmail: string, demoPass: string) => {
-    setEmail(demoEmail);
-    setPassword(demoPass);
-    toast.success(`Filled credentials for ${demoEmail}`);
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -241,38 +236,6 @@ export default function LoginPage() {
                   </Button>
                 </form>
 
-                {/* Quick-Fill Demo Credentials */}
-                <div className="pt-3 border-t border-slate-100">
-                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mb-2">
-                    <KeyRound className="h-3.5 w-3.5 text-indigo-500" />
-                    <span>Quick Demo Sign-In (Click to Auto-fill):</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleQuickFill("admin@company.com", "adminpassword")}
-                      className="flex flex-col items-start p-2 rounded-lg border border-indigo-100 bg-indigo-50/50 hover:bg-indigo-50 text-left transition-colors cursor-pointer"
-                    >
-                      <span className="text-[11px] font-medium text-indigo-900 flex items-center gap-1">
-                        <UserCheck className="h-3 w-3 text-indigo-600" /> HR Admin
-                      </span>
-                      <span className="text-[10px] text-slate-500 font-mono mt-0.5 truncate w-full font-normal">admin@company.com</span>
-                      <span className="text-[9px] text-indigo-600 font-mono font-normal">pass: adminpassword</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleQuickFill("employee@company.com", "employeepassword")}
-                      className="flex flex-col items-start p-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-left transition-colors cursor-pointer"
-                    >
-                      <span className="text-[11px] font-medium text-slate-800 flex items-center gap-1">
-                        <UserCheck className="h-3 w-3 text-emerald-600" /> Employee
-                      </span>
-                      <span className="text-[10px] text-slate-500 font-mono mt-0.5 truncate w-full font-normal">employee@company.com</span>
-                      <span className="text-[9px] text-emerald-600 font-mono font-normal">pass: employeepassword</span>
-                    </button>
-                  </div>
-                </div>
               </CardContent>
             </>
           ) : (

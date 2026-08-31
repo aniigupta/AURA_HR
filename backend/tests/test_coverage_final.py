@@ -403,9 +403,12 @@ def test_file_047_the_handlers_own_empty_filename_guard_holds():
     defence if the binding ever changes — os.path.splitext("") yields no
     extension, so without it an unknown type would reach a parser. Exercised
     by calling the handlers directly with a filename-less upload.
-    """
-    import asyncio
 
+    These handlers are deliberately sync `def`, not `async def`: their parsing,
+    disk and database work is blocking and belongs in FastAPI's threadpool
+    rather than on the event loop. So they are called directly here — there is
+    no coroutine to await.
+    """
     from fastapi import HTTPException, UploadFile
 
     from app.routers.assistant import extract_policy_document, upload_policy_file
@@ -414,13 +417,13 @@ def test_file_047_the_handlers_own_empty_filename_guard_holds():
     def nameless() -> UploadFile:
         return UploadFile(filename="", file=io.BytesIO(b"content"))
 
-    for coro in (
-        extract_policy_document(file=nameless(), admin_user=None),
-        upload_policy_file(request=None, file=nameless(), db=None, admin_user=None),
-        import_attendance_file(request=None, file=nameless(), db=None, admin_user=None),
+    for call in (
+        lambda: extract_policy_document(file=nameless(), admin_user=None),
+        lambda: upload_policy_file(request=None, file=nameless(), db=None, admin_user=None),
+        lambda: import_attendance_file(request=None, file=nameless(), db=None, admin_user=None),
     ):
         with pytest.raises(HTTPException) as exc:
-            asyncio.run(coro)
+            call()
         assert exc.value.status_code == 400
         assert "No file selected" in exc.value.detail
 

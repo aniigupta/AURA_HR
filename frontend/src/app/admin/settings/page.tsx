@@ -6,12 +6,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, getBackendUrl } from "@/utils/api";
 import { useAuth } from "@/context/AuthContext";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button, Input, Skeleton, Badge, Select } from "@/components/ui/atoms";
+import { Button, Input, Skeleton, Badge, Select, cn } from "@/components/ui/atoms";
 import { toast } from "@/components/ui/toast";
 import { 
   MapPin, CalendarDays, Plus, Trash2, ShieldAlert, ShieldCheck, Camera,
   BookOpen, Edit3, Sparkles, CheckCircle2, FileText,
-  UploadCloud, Loader2, AlertCircle, Building2
+  UploadCloud, Loader2, AlertCircle, Building2, Mail, Server, Key
 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog } from "@/components/ui/dialog";
@@ -27,6 +27,13 @@ export interface OfficeSettingsData {
   required_working_hours: number;
   weekends: string;
   require_selfie: boolean;
+  smtp_host?: string | null;
+  smtp_port?: number | null;
+  smtp_username?: string | null;
+  smtp_password?: string | null;
+  smtp_from_email?: string | null;
+  smtp_from_name?: string | null;
+  smtp_use_tls?: boolean | null;
 }
 
 export interface HolidayData {
@@ -976,6 +983,251 @@ function CompanyBrandingCard() {
   );
 }
 
+function TenantSmtpCard({ initialData }: { initialData?: OfficeSettingsData }) {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  const [useCustomSmtp, setUseCustomSmtp] = useState(!!initialData?.smtp_host);
+  const [smtpHost, setSmtpHost] = useState(initialData?.smtp_host || "");
+  const [smtpPort, setSmtpPort] = useState(initialData?.smtp_port?.toString() || "587");
+  const [smtpUser, setSmtpUser] = useState(initialData?.smtp_username || "");
+  const [smtpPass, setSmtpPass] = useState(initialData?.smtp_password || "");
+  const [fromEmail, setFromEmail] = useState(initialData?.smtp_from_email || "");
+  const [fromName, setFromName] = useState(initialData?.smtp_from_name || (user?.organization_name ? `${user.organization_name} HR` : ""));
+
+  useEffect(() => {
+    if (initialData) {
+      setUseCustomSmtp(!!initialData.smtp_host);
+      setSmtpHost(initialData.smtp_host || "");
+      setSmtpPort(initialData.smtp_port?.toString() || "587");
+      setSmtpUser(initialData.smtp_username || "");
+      setSmtpPass(initialData.smtp_password || "");
+      setFromEmail(initialData.smtp_from_email || "");
+      setFromName(initialData.smtp_from_name || (user?.organization_name ? `${user.organization_name} HR` : ""));
+    }
+  }, [initialData, user?.organization_name]);
+
+  const updateSmtpMutation = useMutation({
+    mutationFn: (payload: unknown) => apiFetch("/settings/office", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["officeSettings"] });
+      toast.success("Company Email / SMTP settings updated successfully!");
+    },
+    onError: (err: unknown) => {
+      const errorMsg = err instanceof Error ? err.message : "Failed to update email settings.";
+      toast.error(errorMsg);
+    }
+  });
+
+  const handlePresetSelect = (preset: string) => {
+    if (preset === "gmail") {
+      setSmtpHost("smtp.gmail.com");
+      setSmtpPort("587");
+    } else if (preset === "outlook") {
+      setSmtpHost("smtp.office365.com");
+      setSmtpPort("587");
+    } else if (preset === "sendgrid") {
+      setSmtpHost("smtp.sendgrid.net");
+      setSmtpPort("587");
+      setSmtpUser("apikey");
+    } else if (preset === "zoho") {
+      setSmtpHost("smtp.zoho.com");
+      setSmtpPort("587");
+    } else if (preset === "ses") {
+      setSmtpHost("email-smtp.us-east-1.amazonaws.com");
+      setSmtpPort("587");
+    }
+  };
+
+  const handleSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!useCustomSmtp) {
+      updateSmtpMutation.mutate({
+        smtp_host: null,
+        smtp_port: 587,
+        smtp_username: null,
+        smtp_password: null,
+        smtp_from_email: null,
+        smtp_from_name: null,
+      });
+      return;
+    }
+
+    if (!smtpHost.trim() || !smtpUser.trim()) {
+      toast.error("SMTP Host and Username/Email are required.");
+      return;
+    }
+
+    updateSmtpMutation.mutate({
+      smtp_host: smtpHost.trim(),
+      smtp_port: parseInt(smtpPort) || 587,
+      smtp_username: smtpUser.trim(),
+      smtp_password: smtpPass ? smtpPass.trim() : null,
+      smtp_from_email: fromEmail ? fromEmail.trim() : smtpUser.trim(),
+      smtp_from_name: fromName ? fromName.trim() : undefined,
+      smtp_use_tls: true,
+    });
+  };
+
+  return (
+    <Card className="bg-white border-slate-200 p-4 sm:p-5">
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-0 pb-4 border-b border-slate-100">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600 shrink-0">
+            <Mail className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-xs sm:text-sm font-bold text-slate-900">COMPANY EMAIL & CREDENTIALS DELIVERY (SMTP)</CardTitle>
+              <Badge variant="primary" className="text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200">
+                Multi-Tenant Mail Relay
+              </Badge>
+            </div>
+            <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">
+              Configure how your company onboarding credentials, punch-in links, and employee notices are dispatched
+            </p>
+          </div>
+        </div>
+      </CardHeader>
+
+      <form onSubmit={handleSave} className="pt-4 space-y-4">
+        {/* Toggle Mode: Platform Managed vs Custom Tenant SMTP */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div
+            onClick={() => setUseCustomSmtp(false)}
+            className={cn(
+              "p-3.5 rounded-xl border-2 cursor-pointer transition-all flex flex-col justify-between select-none",
+              !useCustomSmtp
+                ? "border-indigo-600 bg-indigo-50/40 shadow-xs"
+                : "border-slate-200 bg-white hover:border-slate-300"
+            )}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-900">AuraHR Managed Delivery</span>
+              {!useCustomSmtp && <CheckCircle2 className="h-4 w-4 text-indigo-600 shrink-0" />}
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Zero configuration required. Emails are delivered automatically on behalf of {user?.organization_name || "your company"}.
+            </p>
+          </div>
+
+          <div
+            onClick={() => setUseCustomSmtp(true)}
+            className={cn(
+              "p-3.5 rounded-xl border-2 cursor-pointer transition-all flex flex-col justify-between select-none",
+              useCustomSmtp
+                ? "border-indigo-600 bg-indigo-50/40 shadow-xs"
+                : "border-slate-200 bg-white hover:border-slate-300"
+            )}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-900">Custom Company SMTP Server</span>
+              {useCustomSmtp && <CheckCircle2 className="h-4 w-4 text-indigo-600 shrink-0" />}
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Send from your own domain email (e.g., hr@{user?.organization_slug ? `${user.organization_slug}.com` : "yourcompany.com"}).
+            </p>
+          </div>
+        </div>
+
+        {useCustomSmtp && (
+          <div className="space-y-4 p-4 rounded-xl bg-slate-50/70 border border-slate-200/80 animate-in fade-in-0 duration-150">
+            {/* Quick Provider Preset */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200/60">
+              <div>
+                <span className="text-xs font-semibold text-slate-800">Popular Provider Presets</span>
+                <p className="text-[10px] text-slate-500">Quickly fill recommended SMTP server host and ports</p>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: "Google / Gmail", id: "gmail" },
+                  { label: "Microsoft 365", id: "outlook" },
+                  { label: "SendGrid", id: "sendgrid" },
+                  { label: "Zoho Mail", id: "zoho" },
+                  { label: "Amazon SES", id: "ses" },
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => handlePresetSelect(p.id)}
+                    className="text-[10px] font-semibold px-2 py-1 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-colors cursor-pointer"
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="sm:col-span-2">
+                <Input
+                  label="SMTP Server Host *"
+                  placeholder="e.g. smtp.gmail.com or smtp.office365.com"
+                  value={smtpHost}
+                  onChange={(e) => setSmtpHost(e.target.value)}
+                  required={useCustomSmtp}
+                />
+              </div>
+              <div>
+                <Input
+                  label="SMTP Port *"
+                  type="number"
+                  placeholder="587"
+                  value={smtpPort}
+                  onChange={(e) => setSmtpPort(e.target.value)}
+                  required={useCustomSmtp}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input
+                label="SMTP Username / Account Email *"
+                placeholder="e.g. hr@company.com"
+                value={smtpUser}
+                onChange={(e) => setSmtpUser(e.target.value)}
+                required={useCustomSmtp}
+              />
+              <Input
+                label="SMTP Password / App Password *"
+                type="password"
+                placeholder="••••••••••••"
+                value={smtpPass}
+                onChange={(e) => setSmtpPass(e.target.value)}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input
+                label="Sender Display Name"
+                placeholder="e.g. Anarish Innovations HR"
+                value={fromName}
+                onChange={(e) => setFromName(e.target.value)}
+              />
+              <Input
+                label="From Email Address"
+                placeholder="e.g. notifications@company.com"
+                value={fromEmail}
+                onChange={(e) => setFromEmail(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end pt-2">
+          <Button type="submit" size="sm" disabled={updateSmtpMutation.isPending} className="gap-1.5 font-semibold text-xs">
+            {updateSmtpMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Server className="h-3.5 w-3.5" />}
+            Save Email Delivery Settings
+          </Button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const queryClient = useQueryClient();
   
@@ -1042,12 +1294,15 @@ export default function SettingsPage() {
       <div className="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 card-shadow">
         <h1 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900">Portal & Geofence Settings</h1>
         <p className="text-xs text-slate-500 mt-0.5">
-          Configure company branding logo, office GPS coordinates, geofenced radius limits, AI policies, shift rules, and public holidays
+          Configure company branding logo, email delivery (SMTP), office GPS coordinates, AI policies, shift rules, and public holidays
         </p>
       </div>
 
       {/* Company Branding & Logo Card */}
       <CompanyBrandingCard />
+
+      {/* Company Email / SMTP Settings Card */}
+      <TenantSmtpCard initialData={officeSettings} />
 
       {/* AI Policies Knowledge Base Card */}
       <CompanyPolicyCard />

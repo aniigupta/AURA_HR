@@ -2,11 +2,11 @@ import os
 import uuid
 from datetime import date
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request, BackgroundTasks
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.security import RoleChecker, get_password_hash, get_current_user
-from app.core.utils import log_audit, validate_image_bytes
+from app.core.utils import log_audit, validate_image_bytes, send_employee_welcome_email
 from app.models.models import User, EmployeeProfile, Department
 from app.schemas.schemas import (
     UserOut, UserCreate, EmployeeProfileUpdate, DepartmentOut, DepartmentCreate, UserResetPassword, MessageResponse
@@ -116,6 +116,7 @@ def get_employee_by_id(
 def create_employee(
     request: Request,
     emp_data: UserCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     admin_user: User = Depends(admin_required)
 ):
@@ -187,6 +188,35 @@ def create_employee(
     db.commit()
     db.refresh(new_user)
     
+    # Dispatch Onboarding Welcome & Punch-in Link Email
+    org_name = admin_user.organization.name if admin_user.organization else "AuraHR"
+    origin = request.headers.get("origin") or "http://localhost:3000"
+    login_url = f"{origin}/login"
+    
+    tenant_setting = admin_user.organization.office_setting if admin_user.organization else None
+    smtp_cfg = None
+    if tenant_setting and tenant_setting.smtp_host:
+        smtp_cfg = {
+            "smtp_host": tenant_setting.smtp_host,
+            "smtp_port": tenant_setting.smtp_port,
+            "smtp_username": tenant_setting.smtp_username,
+            "smtp_password": tenant_setting.smtp_password,
+            "smtp_from_email": tenant_setting.smtp_from_email,
+            "smtp_from_name": tenant_setting.smtp_from_name or org_name,
+            "smtp_use_tls": tenant_setting.smtp_use_tls,
+        }
+
+    send_employee_welcome_email(
+        background_tasks=background_tasks,
+        recipient_email=new_user.email,
+        employee_name=f"{new_profile.first_name} {new_profile.last_name}",
+        employee_id=new_profile.employee_id,
+        password=emp_data.password,
+        organization_name=org_name,
+        login_url=login_url,
+        smtp_config=smtp_cfg
+    )
+
     log_audit(db, admin_user.id, "EMPLOYEE_CREATED", request.client.host if request.client else None, f"Email: {new_user.email}", organization_id=admin_user.organization_id)
     return new_user
 

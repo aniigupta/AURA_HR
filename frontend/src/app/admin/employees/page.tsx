@@ -12,7 +12,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
 import { 
   Edit, Trash2, Key, ToggleLeft, ToggleRight, 
-  Upload, UserPlus
+  Upload, UserPlus, Copy, Check, Mail
 } from "lucide-react";
 
 export interface DepartmentRecord {
@@ -87,6 +87,14 @@ export default function EmployeesAdminPage() {
 
   const [formNewPass, setFormNewPass] = useState("");
 
+  const [createdCreds, setCreatedCreds] = useState<{
+    name: string;
+    email: string;
+    pass: string;
+    empId: string;
+  } | null>(null);
+  const [hasCopied, setHasCopied] = useState(false);
+
   // Queries
   const { data: employees = [], isLoading } = useQuery<EmployeeRecord[]>({
     queryKey: ["employees", search, selectedDept],
@@ -111,7 +119,13 @@ export default function EmployeesAdminPage() {
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["employees"] });
-      toast.success("Employee profile created successfully!");
+      setCreatedCreds({
+        name: `${formFirstName} ${formLastName}`,
+        email: formEmail,
+        pass: formPassword,
+        empId: formEmpCode,
+      });
+      toast.success("Employee created! Welcome email with login credentials has been sent.");
       setIsAddOpen(false);
       resetAddForm();
     },
@@ -599,6 +613,80 @@ export default function EmployeesAdminPage() {
             <Button type="submit" size="sm">Reset Password</Button>
           </div>
         </form>
+      </Dialog>
+
+      {/* CREATED EMPLOYEE CREDENTIALS MODAL */}
+      <Dialog 
+        isOpen={!!createdCreds} 
+        onClose={() => { setCreatedCreds(null); setHasCopied(false); }} 
+        title="🎉 Employee Account & Login Credentials" 
+        size="md"
+      >
+        {createdCreds && (
+          <div className="space-y-4">
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2.5 text-emerald-800">
+              <Mail className="h-5 w-5 text-emerald-600 shrink-0" />
+              <div className="text-xs">
+                <p className="font-semibold">Welcome Email Dispatched!</p>
+                <p className="text-[11px] text-emerald-700 mt-0.5">
+                  An automated onboarding email with these login details and punch-in link has been sent to <strong>{createdCreds.email}</strong>.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5 text-xs">
+              <div className="flex justify-between py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Employee Name:</span>
+                <span className="font-bold text-slate-800">{createdCreds.name}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Employee ID:</span>
+                <span className="font-bold text-slate-800 font-mono">{createdCreds.empId}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Login Email:</span>
+                <span className="font-bold text-slate-800 font-mono">{createdCreds.email}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-200/60">
+                <span className="text-slate-500 font-medium">Account Password:</span>
+                <span className="font-bold text-indigo-600 font-mono bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">{createdCreds.pass}</span>
+              </div>
+              <div className="flex justify-between py-1">
+                <span className="text-slate-500 font-medium">Portal Login & Punch-in Link:</span>
+                <span className="font-semibold text-indigo-600 underline">
+                  {typeof window !== "undefined" ? `${window.location.origin}/login` : "http://localhost:3000/login"}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
+                  const textToCopy = `Hello ${createdCreds.name},\n\nYour Employee Portal account is ready!\n\nPortal Login & Punch-in Link: ${origin}/login\nEmployee ID: ${createdCreds.empId}\nEmail: ${createdCreds.email}\nPassword: ${createdCreds.pass}\n\nPlease sign in to punch in/out for shifts, request leaves, and view payslips.`;
+                  navigator.clipboard.writeText(textToCopy);
+                  setHasCopied(true);
+                  toast.success("Credentials & Punch-in link copied to clipboard!");
+                  setTimeout(() => setHasCopied(false), 3000);
+                }}
+                className="gap-1.5 font-semibold text-xs text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+              >
+                {hasCopied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+                {hasCopied ? "Copied to Clipboard!" : "Copy Login Info & Punch-in Link"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => { setCreatedCreds(null); setHasCopied(false); }}
+              >
+                Done
+              </Button>
+            </div>
+          </div>
+        )}
       </Dialog>
     </div>
   );

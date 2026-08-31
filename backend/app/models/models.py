@@ -221,6 +221,15 @@ class OfficeSetting(Base):
     # lawful. Admins have always been exempt from the requirement.
     require_selfie = Column(Boolean, default=True, nullable=False)
 
+    # Per-tenant Custom SMTP Email Settings
+    smtp_host = Column(String, nullable=True)
+    smtp_port = Column(Integer, default=587, nullable=True)
+    smtp_username = Column(String, nullable=True)
+    smtp_password = Column(String, nullable=True)
+    smtp_from_email = Column(String, nullable=True)
+    smtp_from_name = Column(String, nullable=True)
+    smtp_use_tls = Column(Boolean, default=True, nullable=True)
+
     # Relationships
     organization = relationship("Organization", back_populates="office_setting")
 

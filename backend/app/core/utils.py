@@ -258,49 +258,100 @@ def get_safe_timezone(tz_name: Optional[str] = None) -> Any:
     except Exception:
         return timezone(timedelta(hours=5, minutes=30))
 
-async def _send_email_async(subject: str, recipient: str, body: str) -> None:
-    """
-    Actually sends the email via aiosmtplib directly — no fastapi-mail
-    wrapper. That wrapper previously hard-pinned aiosmtplib<3.0, which meant
-    a known-vulnerable aiosmtplib 2.0.2 couldn't be upgraded without also
-    bumping fastapi-mail, which in turn pulled in an incompatible Starlette
-    major version and broke FastAPI's routing outright. Talking to
-    aiosmtplib directly removes that whole chain of constraints.
-    """
+async def _send_email_async(
+    subject: str,
+    recipient: str,
+    body: str,
+    smtp_config: Optional[dict] = None
+) -> None:
     import aiosmtplib
     from email.message import EmailMessage
     from app.core.config import settings
 
+    cfg = smtp_config or {}
+    smtp_host = cfg.get("smtp_host") or settings.SMTP_HOST
+    smtp_port = cfg.get("smtp_port") or settings.SMTP_PORT or 587
+    smtp_username = cfg.get("smtp_username") or settings.SMTP_USERNAME or None
+    smtp_password = cfg.get("smtp_password") or settings.SMTP_PASSWORD or None
+    from_email = cfg.get("smtp_from_email") or settings.SMTP_FROM or (smtp_username if smtp_username else "noreply@aurahr.com")
+    from_name = cfg.get("smtp_from_name")
+    
+    from_header = f"{from_name} <{from_email}>" if from_name else from_email
+
+    if not smtp_host or (smtp_host == "localhost" and not smtp_username):
+        logger.info(f"Skipping SMTP email dispatch (localhost/unconfigured). To: {recipient}, Subject: {subject}")
+        return
+
     message = EmailMessage()
-    message["From"] = settings.SMTP_FROM
+    message["From"] = from_header
     message["To"] = recipient
     message["Subject"] = subject
     message.set_content(body)
 
-    # Local dev mail catchers (e.g. mailhog on localhost) don't speak TLS.
-    # Any real SMTP host gets STARTTLS + certificate validation enabled —
-    # never silently disable cert checks against a real mail provider.
-    is_local_smtp = settings.SMTP_HOST in ("localhost", "127.0.0.1")
+    is_local_smtp = smtp_host in ("localhost", "127.0.0.1")
+    use_tls = cfg.get("smtp_use_tls", True) if not is_local_smtp else False
+
     try:
         await aiosmtplib.send(
             message,
-            hostname=settings.SMTP_HOST,
-            port=settings.SMTP_PORT,
-            username=settings.SMTP_USERNAME or None,
-            password=settings.SMTP_PASSWORD or None,
-            start_tls=not is_local_smtp,
-            validate_certs=not is_local_smtp,
+            hostname=smtp_host,
+            port=int(smtp_port),
+            username=smtp_username,
+            password=smtp_password,
+            start_tls=use_tls,
+            validate_certs=use_tls,
         )
+        logger.info(f"Successfully sent email to {recipient} via {smtp_host}")
     except Exception as e:
-        logger.error(f"Failed to send email to {recipient}: {e}")
+        logger.error(f"Failed to send email to {recipient} via {smtp_host}: {e}")
 
-def send_email_background(background_tasks: Any, subject: str, recipient: str, body: str) -> None:
-    from app.core.config import settings
+def send_email_background(
+    background_tasks: Any,
+    subject: str,
+    recipient: str,
+    body: str,
+    smtp_config: Optional[dict] = None
+) -> None:
+    background_tasks.add_task(_send_email_async, subject, recipient, body, smtp_config)
 
-    if not settings.SMTP_HOST or (settings.SMTP_HOST == "localhost" and not settings.SMTP_USERNAME):
-        logger.info(f"Skipping SMTP email dispatch (localhost/unauthenticated). To: {recipient}, Subject: {subject}")
-        return
+def send_employee_welcome_email(
+    background_tasks: Any,
+    recipient_email: str,
+    employee_name: str,
+    employee_id: str,
+    password: str,
+    organization_name: str,
+    login_url: str = "http://localhost:3000/login",
+    smtp_config: Optional[dict] = None
+) -> None:
+    """Dispatches a structured onboarding welcome email with login credentials and direct punch-in link."""
+    subject = f"Welcome to {organization_name} — Your Employee Portal Login & Punch-in Credentials"
+    body = f"""Hello {employee_name},
 
-    background_tasks.add_task(_send_email_async, subject, recipient, body)
+Welcome to {organization_name}!
+
+Your employee self-service portal account has been created. You can use this portal to punch in/out for shifts, track daily working hours, request leaves, and download monthly payslips.
+
+--------------------------------------------------
+YOUR LOGIN CREDENTIALS:
+--------------------------------------------------
+Portal Login Link: {login_url}
+Employee ID:       {employee_id}
+Email Address:     {recipient_email}
+Password:          {password}
+--------------------------------------------------
+
+HOW TO PUNCH IN / CLOCK IN:
+1. Open the login link: {login_url}
+2. Enter your Email and Password above to sign in.
+3. Click "Clock In" on your Employee Dashboard when your shift begins.
+4. If your office uses GPS geofencing or selfie verification, allow location/camera access when prompted.
+
+For security, we recommend changing your password or enabling Two-Factor Authentication (MFA) after your first login.
+
+Best regards,
+{organization_name} HR Team
+"""
+    send_email_background(background_tasks, subject, recipient_email, body, smtp_config)
 
 

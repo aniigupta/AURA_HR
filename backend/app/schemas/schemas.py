@@ -340,6 +340,13 @@ class OfficeSettingUpdate(BaseModel):
     weekends: Optional[str] = Field(None, max_length=100)
     timezone: Optional[str] = Field(None, max_length=50)
     require_selfie: Optional[bool] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = Field(None, ge=1, le=65535)
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from_email: Optional[str] = None
+    smtp_from_name: Optional[str] = None
+    smtp_use_tls: Optional[bool] = None
 
 class OfficeSettingOut(BaseModel):
     id: int
@@ -354,6 +361,13 @@ class OfficeSettingOut(BaseModel):
     weekends: str
     timezone: str
     require_selfie: bool = True
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = 587
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from_email: Optional[str] = None
+    smtp_from_name: Optional[str] = None
+    smtp_use_tls: Optional[bool] = True
     model_config = ConfigDict(from_attributes=True)
 
 # Audit Log Schema

@@ -29,6 +29,8 @@ export default function PerformanceAdminPage() {
     queryFn: () => apiFetch<PerformanceEmployee[]>("/employees/")
   });
 
+  const totalEmployees = employees.length;
+
   return (
     <div className="space-y-4 sm:space-y-6">
       {/* Header Banner */}
@@ -42,7 +44,7 @@ export default function PerformanceAdminPage() {
             Evaluate staff performance scores, track quarterly goals, and schedule appraisal meetings
           </p>
         </div>
-        <Button size="sm" onClick={() => toast.success("New review cycle launched!")} className="shrink-0 self-start sm:self-auto">
+        <Button size="sm" onClick={() => toast.success("New review cycle launched for your workforce!")} className="shrink-0 self-start sm:self-auto">
           <Target className="h-4 w-4 mr-1.5" />
           Initiate Review Cycle
         </Button>
@@ -58,34 +60,46 @@ export default function PerformanceAdminPage() {
             </div>
           </CardHeader>
           <CardContent className="p-0 pt-2">
-            <div className="text-xl sm:text-2xl font-bold text-slate-900">4.6 / 5.0</div>
-            <span className="text-[11px] text-slate-400 font-medium">Exceeds company expectations</span>
+            <div className="text-xl sm:text-2xl font-bold text-slate-900">
+              {totalEmployees > 0 ? "4.8 / 5.0" : "— / 5.0"}
+            </div>
+            <span className="text-[11px] text-slate-400 font-medium">
+              {totalEmployees > 0 ? "Overall workforce rating" : "No evaluations recorded"}
+            </span>
           </CardContent>
         </Card>
 
         <Card className="bg-white border-slate-200 p-4">
           <CardHeader className="flex flex-row items-center justify-between pb-2 p-0 border-b-0">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Completed Reviews</span>
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Evaluations Completed</span>
             <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600">
               <Award className="h-4 w-4" />
             </div>
           </CardHeader>
           <CardContent className="p-0 pt-2">
-            <div className="text-xl sm:text-2xl font-bold text-slate-900">85%</div>
-            <span className="text-[11px] text-slate-400 font-medium">32 of 38 employees evaluated</span>
+            <div className="text-xl sm:text-2xl font-bold text-slate-900">
+              {totalEmployees > 0 ? `0 / ${totalEmployees}` : "0 / 0"}
+            </div>
+            <span className="text-[11px] text-slate-400 font-medium">
+              {totalEmployees > 0 ? `${totalEmployees} staff pending evaluation` : "No employees in directory"}
+            </span>
           </CardContent>
         </Card>
 
         <Card className="bg-white border-slate-200 p-4">
           <CardHeader className="flex flex-row items-center justify-between pb-2 p-0 border-b-0">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Goal Achievement</span>
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Workforce Target OKRs</span>
             <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600">
               <TrendingUp className="h-4 w-4" />
             </div>
           </CardHeader>
           <CardContent className="p-0 pt-2">
-            <div className="text-xl sm:text-2xl font-bold text-slate-900">91%</div>
-            <span className="text-[11px] text-slate-400 font-medium">OKRs on track for Q3</span>
+            <div className="text-xl sm:text-2xl font-bold text-slate-900">
+              {totalEmployees > 0 ? "100%" : "—"}
+            </div>
+            <span className="text-[11px] text-slate-400 font-medium">
+              {totalEmployees > 0 ? "Review cycle active" : "Add staff to assign goals"}
+            </span>
           </CardContent>
         </Card>
       </div>
@@ -112,15 +126,21 @@ export default function PerformanceAdminPage() {
                 ))}
               </TableRow>
             ))
+          ) : employees.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={7} className="text-center py-10 text-slate-400 text-xs">
+                No employee performance evaluations recorded yet. Add employees in the Workforce Directory to begin reviewing staff performance.
+              </TableCell>
+            </TableRow>
           ) : (
             employees.map((emp: PerformanceEmployee) => (
               <TableRow key={emp.id}>
-                <TableCell className="font-semibold text-slate-400">{emp.profile?.employee_id}</TableCell>
+                <TableCell className="font-semibold text-slate-400">{emp.profile?.employee_id || "EMP"}</TableCell>
                 <TableCell className="font-semibold text-slate-900">
                   {emp.profile?.first_name} {emp.profile?.last_name}
                 </TableCell>
                 <TableCell className="text-slate-600">{emp.profile?.designation || "Staff"}</TableCell>
-                <TableCell className="text-slate-600">{emp.profile?.department?.name || "Operations"}</TableCell>
+                <TableCell className="text-slate-600">{emp.profile?.department?.name || "General"}</TableCell>
                 <TableCell className="font-bold text-amber-600">
                   <span className="inline-flex items-center gap-1">
                     <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" /> 4.8 / 5.0

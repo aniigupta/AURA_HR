@@ -45,6 +45,19 @@ interface ActiveWorker {
   duration: string;
 }
 
+interface DepartmentStat {
+  name: string;
+  count: number;
+  percent: number;
+}
+
+interface CelebrationItem {
+  name: string;
+  dept: string;
+  date: string;
+  avatar: string;
+}
+
 interface AdminDashboardData {
   cards?: {
     total_employees?: number;
@@ -63,6 +76,8 @@ interface AdminDashboardData {
   };
   needs_attention?: NeedsAttentionItem[];
   currently_working?: ActiveWorker[];
+  department_stats?: DepartmentStat[];
+  upcoming_celebrations?: CelebrationItem[];
 }
 
 function useMounted() {
@@ -102,18 +117,8 @@ export default function AdminDashboard() {
     { name: "Avg Work Hours", value: `${data?.cards?.avg_working_hours || 0} hrs`, icon: Hourglass, variant: "neutral", subtitle: "Daily average" },
   ];
 
-  const dummyBirthdays = [
-    { name: "Sarah Jenkins", dept: "Engineering", date: "Aug 16 (In 2 days)", avatar: "S" },
-    { name: "Michael Chen", dept: "Product Design", date: "Aug 19 (In 5 days)", avatar: "M" },
-    { name: "David Miller", dept: "Operations", date: "Aug 22 (In 8 days)", avatar: "D" },
-  ];
-
-  const departmentStats = [
-    { name: "Engineering & Tech", count: 14, percent: 40 },
-    { name: "Operations & HR", count: 8, percent: 25 },
-    { name: "Product & Design", count: 6, percent: 20 },
-    { name: "Sales & Marketing", count: 5, percent: 15 },
-  ];
+  const departmentStats = data?.department_stats || [];
+  const celebrations = data?.upcoming_celebrations || [];
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -366,17 +371,25 @@ export default function AdminDashboard() {
             <CardDescription className="text-xs">Distribution of staff across company teams</CardDescription>
           </CardHeader>
           <CardContent className="p-4 sm:p-5 space-y-3">
-            {departmentStats.map((dept) => (
-              <div key={dept.name} className="space-y-1">
-                <div className="flex justify-between text-xs font-medium">
-                  <span className="text-slate-800">{dept.name}</span>
-                  <span className="text-slate-500">{dept.count} members ({dept.percent}%)</span>
-                </div>
-                <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-indigo-600 rounded-full" style={{ width: `${dept.percent}%` }} />
-                </div>
+            {departmentStats.length === 0 ? (
+              <div className="py-8 text-center text-slate-400">
+                <Building2 className="h-8 w-8 text-indigo-400/60 mx-auto mb-2" />
+                <p className="text-xs font-semibold text-slate-700">No Departments Available</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Create departments to start allocating your workforce.</p>
               </div>
-            ))}
+            ) : (
+              departmentStats.map((dept) => (
+                <div key={dept.name} className="space-y-1">
+                  <div className="flex justify-between text-xs font-medium">
+                    <span className="text-slate-800">{dept.name}</span>
+                    <span className="text-slate-500">{dept.count} {dept.count === 1 ? "member" : "members"} ({dept.percent}%)</span>
+                  </div>
+                  <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                    <div className="h-full bg-indigo-600 rounded-full" style={{ width: `${Math.max(dept.percent, dept.count > 0 ? 5 : 0)}%` }} />
+                  </div>
+                </div>
+              ))
+            )}
           </CardContent>
         </Card>
 
@@ -389,21 +402,31 @@ export default function AdminDashboard() {
             </CardTitle>
             <CardDescription className="text-xs">Birthdays & work anniversaries this week</CardDescription>
           </CardHeader>
-          <CardContent className="p-4 sm:p-5 divide-y divide-slate-100">
-            {dummyBirthdays.map((b) => (
-              <div key={b.name} className="py-2.5 flex items-center justify-between first:pt-0 last:pb-0 gap-2">
-                <div className="flex items-center gap-2.5 sm:gap-3">
-                  <div className="h-8 w-8 rounded-full bg-indigo-50 text-indigo-600 font-bold text-xs flex items-center justify-center border border-indigo-100 shrink-0">
-                    {b.avatar}
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold text-slate-800">{b.name}</div>
-                    <div className="text-[10px] text-slate-400">{b.dept}</div>
-                  </div>
-                </div>
-                <Badge variant="warning">{b.date}</Badge>
+          <CardContent className="p-4 sm:p-5">
+            {celebrations.length === 0 ? (
+              <div className="py-8 text-center text-slate-400">
+                <Cake className="h-8 w-8 text-amber-500/60 mx-auto mb-2" />
+                <p className="text-xs font-semibold text-slate-700">No Celebrations This Week</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">No employee birthdays or work anniversaries scheduled.</p>
               </div>
-            ))}
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {celebrations.map((b) => (
+                  <div key={b.name} className="py-2.5 flex items-center justify-between first:pt-0 last:pb-0 gap-2">
+                    <div className="flex items-center gap-2.5 sm:gap-3">
+                      <div className="h-8 w-8 rounded-full bg-indigo-50 text-indigo-600 font-bold text-xs flex items-center justify-center border border-indigo-100 shrink-0">
+                        {b.avatar}
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-slate-800">{b.name}</div>
+                        <div className="text-[10px] text-slate-400">{b.dept}</div>
+                      </div>
+                    </div>
+                    <Badge variant="warning">{b.date}</Badge>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

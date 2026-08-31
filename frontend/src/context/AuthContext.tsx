@@ -33,8 +33,43 @@ interface User {
   plan?: string;
   is_active: boolean;
   mfa_enabled: boolean;
+  first_name?: string;
+  last_name?: string;
   profile?: UserProfile;
+  organization?: {
+    id: string;
+    name: string;
+    slug: string;
+    plan: string;
+  };
 }
+
+const normalizeUser = (data: any): User => {
+  if (!data) return data;
+  const orgName = data?.organization?.name || data?.organization_name || "AuraHR";
+  const orgSlug = data?.organization?.slug || data?.organization_slug || "default";
+  const orgPlan = data?.organization?.plan || data?.plan || "Starter";
+  const firstName = data?.profile?.first_name || data?.first_name || "";
+  const lastName = data?.profile?.last_name || data?.last_name || "";
+  
+  return {
+    ...data,
+    first_name: firstName,
+    last_name: lastName,
+    organization_name: orgName,
+    organization_slug: orgSlug,
+    plan: orgPlan,
+    profile: data?.profile || {
+      first_name: firstName,
+      last_name: lastName,
+      employee_id: data?.employee_id || "EMP000",
+      leave_balance_casual: 12,
+      leave_balance_sick: 10,
+      leave_balance_paid: 15,
+      wfh_enabled: false,
+    },
+  };
+};
 
 interface LoginResponse {
   user: User;
@@ -87,7 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshUser = useCallback(async () => {
     try {
       const data = await apiFetch<User>("/auth/me");
-      setUser(data);
+      setUser(normalizeUser(data));
     } catch {
       setUser(null);
     } finally {
@@ -101,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const data = await apiFetch<User>("/auth/me");
         if (isMounted) {
-          setUser(data);
+          setUser(normalizeUser(data));
         }
       } catch {
         if (isMounted) {
@@ -158,7 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const { user: loggedInUser } = data as LoginResponse;
-      setUser(loggedInUser);
+      setUser(normalizeUser(loggedInUser));
 
       if (loggedInUser.role === "Admin") {
         router.push("/admin/dashboard");
@@ -180,7 +215,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      setUser(data.user);
+      setUser(normalizeUser(data.user));
       router.push("/admin/dashboard");
     } catch (err) {
       setIsLoading(false);
@@ -195,7 +230,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         method: "POST",
         body: JSON.stringify({ mfa_token: mfaToken, code }),
       });
-      setUser(data.user);
+      setUser(normalizeUser(data.user));
       router.push("/admin/dashboard");
     } catch (err) {
       setIsLoading(false);

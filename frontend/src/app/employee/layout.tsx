@@ -24,10 +24,16 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
     { name: "My Account Profile", href: "/employee/profile", icon: UserCircle },
   ];
 
+  const empFirstName = user?.profile?.first_name || (user as any)?.first_name || user?.email?.split("@")[0] || "Employee";
+  const empLastName = user?.profile?.last_name || (user as any)?.last_name || "";
+  const empDisplayName = `${empFirstName} ${empLastName}`.trim();
+  const empInitial = (empFirstName.charAt(0) || "E").toUpperCase();
+  const empDesignation = user?.profile?.designation || "Staff Member";
+
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-800">
       
-      {/* Mobile/Tablet sidebar backdrop overlay */}
+      {/* Mobile sidebar backdrop overlay */}
       {isSidebarOpen && (
         <div 
           className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs lg:hidden transition-opacity duration-200"
@@ -42,33 +48,34 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
         }`}
       >
         <div className="flex flex-col h-full">
-          {/* Sidebar Header Brand */}
-          <div className="flex items-center justify-between px-5 h-16 border-b border-slate-100 shrink-0">
-            <Link href="/employee/dashboard" className="flex items-center gap-2.5" onClick={() => setIsSidebarOpen(false)}>
-              <div className="p-2 rounded-xl bg-indigo-600 text-white shadow-xs">
-                <Sparkles className="h-4.5 w-4.5" />
+          {/* Brand Header */}
+          <div className="flex items-center justify-between px-4 h-16 border-b border-slate-100 shrink-0">
+            <Link href="/employee/dashboard" className="flex items-center gap-2.5 min-w-0" onClick={() => setIsSidebarOpen(false)}>
+              <div className="p-2 rounded-xl bg-indigo-600 text-white shadow-xs shrink-0">
+                <Sparkles className="h-4 w-4" />
               </div>
-              <div className="flex flex-col">
-                <span className="font-medium text-base tracking-tight text-slate-900 leading-none">
-                  Aura<span className="text-indigo-600 font-semibold">HR</span>
+              <div className="flex flex-col min-w-0">
+                <span className="font-medium text-sm tracking-tight text-slate-900 leading-tight truncate" title={user?.organization_name || "AuraHR"}>
+                  {user?.organization_name || "AuraHR"}
                 </span>
-                <span className="text-[10px] font-normal text-slate-400 tracking-wider">EMPLOYEE PORTAL</span>
+                <span className="text-[10px] text-slate-400 font-normal truncate">
+                  Employee Self-Service
+                </span>
               </div>
             </Link>
             
-            {/* Mobile close toggle */}
             <button 
-              className="lg:hidden p-1.5 hover:bg-slate-100 rounded-lg cursor-pointer text-slate-400 hover:text-slate-600"
+              className="lg:hidden p-1.5 hover:bg-slate-100 rounded-lg cursor-pointer text-slate-400 hover:text-slate-600 shrink-0"
               onClick={() => setIsSidebarOpen(false)}
             >
               <X className="h-5 w-5" />
             </button>
           </div>
 
-          {/* Navigation Links */}
+          {/* Navigation Items */}
           <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
             <div className="px-3 pb-2 text-[10px] font-medium tracking-wider text-slate-400 uppercase">
-              Employee Self-Service
+              Main Menu
             </div>
             {navItems.map((item) => {
               const isActive = pathname === item.href || (item.href !== "/employee/dashboard" && pathname.startsWith(item.href));
@@ -91,7 +98,7 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
             })}
           </nav>
 
-          {/* Sidebar Footer */}
+          {/* Sidebar Footer Logout */}
           <div className="p-3 border-t border-slate-100 bg-slate-50/50">
             <Button
               onClick={logout}
@@ -106,7 +113,7 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
         </div>
       </aside>
 
-      {/* Main Container Layout */}
+      {/* Main Content Area */}
       <div className="flex flex-col flex-1 lg:pl-64 min-h-screen w-full overflow-x-hidden">
         {/* Top Navbar Header */}
         <header className="flex items-center justify-between px-3.5 sm:px-6 h-16 border-b border-slate-200 bg-white shrink-0 sticky top-0 z-30 card-shadow">
@@ -119,27 +126,19 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
               <Menu className="h-5 w-5" />
             </button>
             <h2 className="text-xs font-normal text-slate-500 hidden sm:block">
-              Welcome, <span className="font-medium text-slate-800">{user?.profile?.first_name || "Employee"}</span> 👋
+              Welcome, <span className="font-medium text-slate-800">{empFirstName}</span> 👋
             </h2>
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Notification Bell */}
-            <button
-              className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg cursor-pointer transition-colors relative"
-              title="Notifications"
-            >
-              <Bell className="h-5 w-5" />
-            </button>
-
             {/* Profile Avatar Widget */}
             <div className="flex items-center gap-2 sm:gap-3 border-l border-slate-200 pl-2 sm:pl-3">
               <div className="hidden md:flex flex-col text-right">
                 <span className="text-xs font-medium text-slate-900 leading-tight">
-                  {user?.profile?.first_name || "Priya"} {user?.profile?.last_name || "Patel"}
+                  {empDisplayName}
                 </span>
                 <span className="text-[10px] text-slate-500 font-normal uppercase tracking-wide">
-                  {user?.profile?.designation || "Software Engineer"}
+                  {empDesignation}
                 </span>
               </div>
               
@@ -156,7 +155,7 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
                 </div>
               ) : (
                 <div className="h-8 w-8 rounded-full bg-indigo-600 text-white font-medium text-xs flex items-center justify-center border border-indigo-200 card-shadow shrink-0">
-                  {user?.profile?.first_name?.charAt(0) || "P"}
+                  {empInitial}
                 </div>
               )}
             </div>

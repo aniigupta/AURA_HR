@@ -12,11 +12,23 @@ import {
 import { Button, SearchInput } from "@/components/ui/atoms";
 import HRAssistantChatbot from "@/components/HRAssistantChatbot";
 
+import { useQuery } from "@tanstack/react-query";
+import { apiFetch } from "@/utils/api";
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+
+  const { data: dashboardData } = useQuery<any>({
+    queryKey: ["adminDashboardNotifications"],
+    queryFn: () => apiFetch("/dashboard/admin"),
+    staleTime: 30000,
+    retry: 1,
+  });
+
+  const alerts: any[] = dashboardData?.needs_attention || [];
 
   const navItems = [
     { name: "Dashboard", href: "/admin/dashboard", icon: BarChart3 },
@@ -31,11 +43,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     { name: "Portal Settings", href: "/admin/settings", icon: Settings },
   ];
 
-  const dummyNotifications = [
-    { id: 1, title: "Leave Request", desc: "Priya Patel requested 2 days Casual leave", time: "10m ago", icon: CalendarDays, type: "info" },
-    { id: 2, title: "Clock-in Alert", desc: "Staff clocked in outside geofence radius", time: "1h ago", icon: AlertCircle, type: "warning" },
-    { id: 3, title: "Monthly Payroll", desc: "August salary draft ready for NEFT review", time: "3h ago", icon: CheckCircle2, type: "success" },
-  ];
+  const adminFirstName = user?.profile?.first_name || (user as any)?.first_name || user?.email?.split("@")[0] || "Admin";
+  const adminLastName = user?.profile?.last_name || (user as any)?.last_name || "";
+  const adminDisplayName = `${adminFirstName} ${adminLastName}`.trim();
+  const adminInitial = (adminFirstName.charAt(0) || "A").toUpperCase();
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-800">
@@ -157,39 +168,68 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 title="Notifications"
               >
                 <Bell className="h-5 w-5" />
-                <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-indigo-600 ring-2 ring-white" />
+                {alerts.length > 0 && (
+                  <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-indigo-600 ring-2 ring-white" />
+                )}
               </button>
 
               {showNotifications && (
                 <div className="absolute right-0 mt-2 w-72 sm:w-80 bg-white rounded-xl border border-slate-200 card-shadow z-50 overflow-hidden animate-in fade-in-50 zoom-in-95 duration-150">
                   <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50/50">
                     <span className="text-xs font-medium text-slate-900">Notifications</span>
-                    <span className="text-[10px] font-medium bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full">3 New</span>
+                    <span className="text-[10px] font-medium bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full">
+                      {alerts.length} New
+                    </span>
                   </div>
                   <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
-                    {dummyNotifications.map((n) => {
-                      const NIcon = n.icon;
-                      return (
-                        <div key={n.id} className="p-3 hover:bg-slate-50/80 transition-colors flex items-start gap-3 cursor-pointer">
-                          <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600 shrink-0 mt-0.5">
-                            <NIcon className="h-3.5 w-3.5" />
-                          </div>
-                          <div className="flex-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-medium text-slate-800">{n.title}</span>
-                              <span className="text-[10px] text-slate-400 font-normal">{n.time}</span>
+                    {alerts.length === 0 ? (
+                      <div className="py-8 px-4 text-center">
+                        <CheckCircle2 className="h-7 w-7 text-emerald-500 mx-auto mb-2 opacity-80" />
+                        <p className="text-xs font-medium text-slate-800">All caught up!</p>
+                        <p className="text-[11px] text-slate-400 mt-1">No pending requests or alerts for {user?.organization_name || "your organization"}.</p>
+                      </div>
+                    ) : (
+                      alerts.map((n: any) => {
+                        const href = n.type === "leave_pending" ? "/admin/leaves" : "/admin/attendance";
+                        return (
+                          <Link 
+                            key={n.id} 
+                            href={href}
+                            onClick={() => setShowNotifications(false)}
+                            className="p-3 hover:bg-slate-50/80 transition-colors flex items-start gap-3 cursor-pointer"
+                          >
+                            <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600 shrink-0 mt-0.5">
+                              {n.type === "leave_pending" ? (
+                                <CalendarDays className="h-3.5 w-3.5" />
+                              ) : (
+                                <AlertCircle className="h-3.5 w-3.5" />
+                              )}
                             </div>
-                            <p className="text-[11px] text-slate-500 mt-0.5 font-normal">{n.desc}</p>
-                          </div>
-                        </div>
-                      );
-                    })}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-xs font-medium text-slate-800 truncate">{n.issue}</span>
+                                <span className="text-[10px] font-medium text-indigo-600 shrink-0">{n.action}</span>
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5 font-normal truncate">
+                                {n.employee_name}: {n.details}
+                              </p>
+                            </div>
+                          </Link>
+                        );
+                      })
+                    )}
                   </div>
-                  <div className="p-2 text-center border-t border-slate-100 bg-slate-50">
-                    <button onClick={() => setShowNotifications(false)} className="text-[11px] font-medium text-indigo-600 hover:underline">
-                      Mark all as read
-                    </button>
-                  </div>
+                  {alerts.length > 0 && (
+                    <div className="p-2 text-center border-t border-slate-100 bg-slate-50">
+                      <Link 
+                        href="/admin/dashboard" 
+                        onClick={() => setShowNotifications(false)} 
+                        className="text-[11px] font-medium text-indigo-600 hover:underline"
+                      >
+                        View Action Center
+                      </Link>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -198,14 +238,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <div className="flex items-center gap-2 sm:gap-3 border-l border-slate-200 pl-2 sm:pl-3">
               <div className="hidden md:flex flex-col text-right">
                 <span className="text-xs font-medium text-slate-900 leading-tight">
-                  {user?.profile?.first_name || "Rajesh"} {user?.profile?.last_name || "Sharma"}
+                  {adminDisplayName}
                 </span>
                 <span className="text-[10px] text-slate-500 font-normal tracking-wide">
                   SYSTEM ADMIN
                 </span>
               </div>
               <div className="h-8 w-8 rounded-full bg-indigo-600 text-white font-medium text-xs flex items-center justify-center border border-indigo-200 card-shadow shrink-0">
-                {user?.profile?.first_name?.charAt(0) || "R"}
+                {adminInitial}
               </div>
             </div>
           </div>

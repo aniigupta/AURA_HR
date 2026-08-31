@@ -55,6 +55,10 @@ def _issue_session(response: Response, user: User) -> dict:
     org_slug = user.organization.slug if user.organization else "default"
     org_plan = user.organization.plan if user.organization else "Starter"
 
+    first_name = user.profile.first_name if user.profile else ""
+    last_name = user.profile.last_name if user.profile else ""
+    profile_img = user.profile.profile_image_url if user.profile else None
+
     return {
         "message": "Login successful",
         "user": {
@@ -65,9 +69,21 @@ def _issue_session(response: Response, user: User) -> dict:
             "plan": org_plan,
             "email": user.email,
             "role": user.role,
-            "first_name": user.profile.first_name if user.profile else "",
-            "last_name": user.profile.last_name if user.profile else "",
-            "profile_image_url": user.profile.profile_image_url if user.profile else None
+            "first_name": first_name,
+            "last_name": last_name,
+            "profile_image_url": profile_img,
+            "profile": {
+                "first_name": first_name,
+                "last_name": last_name,
+                "employee_id": user.profile.employee_id if user.profile else "EMP000",
+                "designation": user.profile.designation if user.profile else "Administrator",
+                "phone": user.profile.phone if user.profile else None,
+                "profile_image_url": profile_img,
+                "leave_balance_casual": user.profile.leave_balance_casual if user.profile else 12,
+                "leave_balance_sick": user.profile.leave_balance_sick if user.profile else 10,
+                "leave_balance_paid": user.profile.leave_balance_paid if user.profile else 15,
+                "wfh_enabled": user.profile.wfh_enabled if user.profile else False,
+            } if user.profile else None
         }
     }
 

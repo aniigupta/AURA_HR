@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.security import get_current_user, RoleChecker
 from app.core.utils import get_safe_timezone
-from app.models.models import User, Attendance, LeaveRequest, OfficeSetting, AttendanceCorrectionRequest, BreakSession
+from app.models.models import User, Attendance, LeaveRequest, OfficeSetting, AttendanceCorrectionRequest, BreakSession, Department, EmployeeProfile
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard Analytics"])
 
@@ -268,6 +268,50 @@ def get_admin_dashboard(
             "duration": duration_str
         })
 
+    # 6. Dynamic Department Headcounts in this organization
+    org_depts = db.query(Department).filter(Department.organization_id == org_id).all()
+    org_profiles = db.query(EmployeeProfile).join(User, User.id == EmployeeProfile.user_id).filter(
+        EmployeeProfile.organization_id == org_id,
+        User.role == "Employee",
+        User.is_active == True
+    ).all()
+    
+    total_active_staff = len(org_profiles)
+    dept_map = {d.id: {"name": d.name, "count": 0} for d in org_depts}
+    
+    for p in org_profiles:
+        if p.department_id and p.department_id in dept_map:
+            dept_map[p.department_id]["count"] += 1
+            
+    department_stats = []
+    for d_id, d_info in dept_map.items():
+        pct = round((d_info["count"] / total_active_staff) * 100) if total_active_staff > 0 else 0
+        department_stats.append({
+            "name": d_info["name"],
+            "count": d_info["count"],
+            "percent": pct
+        })
+
+    # 7. Upcoming Celebrations (Work Anniversaries from join_date this week)
+    upcoming_celebrations = []
+    for p in org_profiles:
+        if p.join_date:
+            # Check if anniversary is within the next 7 days
+            try:
+                anniv_this_year = p.join_date.replace(year=today.year)
+                delta_days = (anniv_this_year - today).days
+                if 0 <= delta_days <= 7:
+                    yrs = today.year - p.join_date.year
+                    if yrs > 0:
+                        upcoming_celebrations.append({
+                            "name": f"{p.first_name} {p.last_name}",
+                            "dept": dept_map.get(p.department_id, {}).get("name", "General"),
+                            "date": f"Work Anniversary ({yrs}y) - In {delta_days}d" if delta_days > 0 else f"Work Anniversary ({yrs}y) - Today! 🎉",
+                            "avatar": p.first_name[0].upper() if p.first_name else "E"
+                        })
+            except Exception:
+                pass
+
     return {
         "cards": {
             "total_employees": total_employees,
@@ -286,7 +330,9 @@ def get_admin_dashboard(
         },
         "pending_leaves": len(pending_leave_requests),
         "needs_attention": needs_attention,
-        "currently_working": currently_working
+        "currently_working": currently_working,
+        "department_stats": department_stats,
+        "upcoming_celebrations": upcoming_celebrations
     }
 
 @router.get("/employee")

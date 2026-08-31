@@ -18,6 +18,7 @@ class Organization(Base):
     slug = Column(String, unique=True, index=True, nullable=False)
     plan = Column(String, default="Starter")  # "Starter", "Growth", "Enterprise"
     max_employees = Column(Integer, default=25)
+    logo_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True, index=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)

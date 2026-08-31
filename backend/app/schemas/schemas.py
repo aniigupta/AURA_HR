@@ -36,6 +36,7 @@ class MessageResponse(BaseModel):
 class OrganizationBase(BaseModel):
     name: str = Field(..., min_length=2, max_length=150)
     slug: str = Field(..., min_length=2, max_length=100, pattern="^[a-z0-9-]+$")
+    logo_url: Optional[str] = None
 
 class OrganizationCreate(OrganizationBase):
     plan: Optional[str] = Field("Starter", pattern="^(Starter|Growth|Enterprise)$")
@@ -46,6 +47,7 @@ class OrganizationUpdate(BaseModel):
     plan: Optional[str] = Field(None, pattern="^(Starter|Growth|Enterprise)$")
     max_employees: Optional[int] = Field(None, ge=1)
     is_active: Optional[bool] = None
+    logo_url: Optional[str] = None
 
 class OrganizationOut(OrganizationBase):
     id: UUID

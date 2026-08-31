@@ -30,6 +30,7 @@ interface User {
   organization_id?: string;
   organization_name?: string;
   organization_slug?: string;
+  logo_url?: string | null;
   plan?: string;
   is_active: boolean;
   mfa_enabled: boolean;
@@ -41,6 +42,7 @@ interface User {
     name: string;
     slug: string;
     plan: string;
+    logo_url?: string | null;
   };
 }
 
@@ -49,6 +51,7 @@ const normalizeUser = (data: any): User => {
   const orgName = data?.organization?.name || data?.organization_name || "AuraHR";
   const orgSlug = data?.organization?.slug || data?.organization_slug || "default";
   const orgPlan = data?.organization?.plan || data?.plan || "Starter";
+  const orgLogo = data?.organization?.logo_url || data?.logo_url || null;
   const firstName = data?.profile?.first_name || data?.first_name || "";
   const lastName = data?.profile?.last_name || data?.last_name || "";
   
@@ -58,6 +61,7 @@ const normalizeUser = (data: any): User => {
     last_name: lastName,
     organization_name: orgName,
     organization_slug: orgSlug,
+    logo_url: orgLogo,
     plan: orgPlan,
     profile: data?.profile || {
       first_name: firstName,

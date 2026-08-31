@@ -51,9 +51,22 @@ export default function EmployeeLayout({ children }: { children: React.ReactNode
           {/* Brand Header */}
           <div className="flex items-center justify-between px-4 h-16 border-b border-slate-100 shrink-0">
             <Link href="/employee/dashboard" className="flex items-center gap-2.5 min-w-0" onClick={() => setIsSidebarOpen(false)}>
-              <div className="p-2 rounded-xl bg-indigo-600 text-white shadow-xs shrink-0">
-                <Sparkles className="h-4 w-4" />
-              </div>
+              {user?.logo_url ? (
+                <div className="relative h-9 w-9 rounded-xl overflow-hidden border border-slate-200 shadow-xs shrink-0 bg-white">
+                  <Image
+                    src={user.logo_url.startsWith("http") ? user.logo_url : `${getBackendUrl()}${user.logo_url}`}
+                    alt="Company logo"
+                    fill
+                    sizes="36px"
+                    unoptimized
+                    className="object-contain p-0.5"
+                  />
+                </div>
+              ) : (
+                <div className="p-2 rounded-xl bg-indigo-600 text-white shadow-xs shrink-0">
+                  <Sparkles className="h-4 w-4" />
+                </div>
+              )}
               <div className="flex flex-col min-w-0">
                 <span className="font-medium text-sm tracking-tight text-slate-900 leading-tight truncate" title={user?.organization_name || "AuraHR"}>
                   {user?.organization_name || "AuraHR"}

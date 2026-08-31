@@ -54,6 +54,7 @@ def _issue_session(response: Response, user: User) -> dict:
     org_name = user.organization.name if user.organization else "AuraWork Portal"
     org_slug = user.organization.slug if user.organization else "default"
     org_plan = user.organization.plan if user.organization else "Starter"
+    org_logo = user.organization.logo_url if user.organization else None
 
     first_name = user.profile.first_name if user.profile else ""
     last_name = user.profile.last_name if user.profile else ""
@@ -66,6 +67,7 @@ def _issue_session(response: Response, user: User) -> dict:
             "organization_id": user.organization_id,
             "organization_name": org_name,
             "organization_slug": org_slug,
+            "logo_url": org_logo,
             "plan": org_plan,
             "email": user.email,
             "role": user.role,

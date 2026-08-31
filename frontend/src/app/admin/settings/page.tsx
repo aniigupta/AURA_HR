@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
+import Image from "next/image";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiFetch } from "@/utils/api";
+import { apiFetch, getBackendUrl } from "@/utils/api";
 import { useAuth } from "@/context/AuthContext";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button, Input, Skeleton, Badge } from "@/components/ui/atoms";
@@ -10,7 +11,7 @@ import { toast } from "@/components/ui/toast";
 import { 
   MapPin, CalendarDays, Plus, Trash2, ShieldAlert, ShieldCheck, Camera,
   BookOpen, Edit3, Sparkles, CheckCircle2, FileText,
-  UploadCloud, Loader2, AlertCircle
+  UploadCloud, Loader2, AlertCircle, Building2
 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog } from "@/components/ui/dialog";
@@ -777,7 +778,207 @@ function CompanyPolicyCard() {
   );
 }
 
-export default function OfficeSettingsPage() {
+function CompanyBrandingCard() {
+  const { user, refreshUser } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [orgName, setOrgName] = useState(user?.organization_name || "");
+  const [isSavingName, setIsSavingName] = useState(false);
+
+  useEffect(() => {
+    if (user?.organization_name) {
+      setOrgName(user.organization_name);
+    }
+  }, [user?.organization_name]);
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!["image/jpeg", "image/png", "image/webp", "image/svg+xml"].includes(file.type)) {
+      toast.error("Please upload a valid image (PNG, JPG, WebP, or SVG)");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Logo file size exceeds the 5MB limit");
+      return;
+    }
+
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch("/api/settings/organization/logo", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to upload logo");
+      }
+
+      await refreshUser();
+      toast.success("Company logo updated successfully!");
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Failed to upload logo";
+      toast.error(errMsg);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const handleRemoveLogo = async () => {
+    setIsUploading(true);
+    try {
+      await apiFetch("/settings/organization", {
+        method: "PUT",
+        body: JSON.stringify({ logo_url: null }),
+      });
+      await refreshUser();
+      toast.success("Custom logo removed. Reverted to standard brand mark.");
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Failed to remove logo";
+      toast.error(errMsg);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleSaveName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!orgName.trim()) {
+      toast.error("Company name cannot be empty");
+      return;
+    }
+    setIsSavingName(true);
+    try {
+      await apiFetch("/settings/organization", {
+        method: "PUT",
+        body: JSON.stringify({ name: orgName.trim() }),
+      });
+      await refreshUser();
+      toast.success("Company name updated successfully!");
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Failed to update company name";
+      toast.error(errMsg);
+    } finally {
+      setIsSavingName(false);
+    }
+  };
+
+  return (
+    <Card className="bg-white border-slate-200 p-4 sm:p-5">
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-0 pb-4 border-b border-slate-100">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600 shrink-0">
+            <Building2 className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-xs sm:text-sm font-bold text-slate-900">COMPANY BRANDING & LOGO</CardTitle>
+              <Badge variant="primary" className="text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200">
+                Workspace Identity
+              </Badge>
+            </div>
+            <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">
+              Customize your company workspace brand logo, portal icon, and organization name
+            </p>
+          </div>
+        </div>
+      </CardHeader>
+
+      <div className="pt-4 grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+        {/* Left: Logo Preview & Upload */}
+        <div className="flex flex-col sm:flex-row items-center gap-4 md:col-span-2">
+          <div className="relative group">
+            {user?.logo_url ? (
+              <div className="h-20 w-20 rounded-2xl overflow-hidden border-2 border-indigo-100 shadow-sm bg-white flex items-center justify-center p-1.5 shrink-0">
+                <Image
+                  src={user.logo_url.startsWith("http") ? user.logo_url : `${getBackendUrl()}${user.logo_url}`}
+                  alt="Company Logo"
+                  width={72}
+                  height={72}
+                  unoptimized
+                  className="object-contain max-h-full max-w-full"
+                />
+              </div>
+            ) : (
+              <div className="p-4 rounded-2xl bg-indigo-600 text-white flex flex-col items-center justify-center shadow-md shrink-0 h-20 w-20">
+                <Sparkles className="h-7 w-7" />
+                <span className="text-[8px] font-bold mt-1 uppercase tracking-wider">Default</span>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2 text-center sm:text-left flex-1">
+            <h4 className="text-xs font-bold text-slate-900">Company Logo Mark</h4>
+            <p className="text-[11px] text-slate-500">
+              Displayed in the navigation sidebar, payslips, and self-service portal. Recommended: Square PNG, JPG, or SVG (max 5MB).
+            </p>
+            <div className="flex flex-wrap gap-2 pt-1 justify-center sm:justify-start">
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleLogoUpload}
+                accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                className="hidden"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isUploading}
+                onClick={() => fileInputRef.current?.click()}
+                className="gap-1.5 font-semibold text-xs text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+              >
+                {isUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UploadCloud className="h-3.5 w-3.5" />}
+                {user?.logo_url ? "Change Logo" : "Upload Custom Logo"}
+              </Button>
+              {user?.logo_url && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={isUploading}
+                  onClick={handleRemoveLogo}
+                  className="text-xs text-rose-600 hover:bg-rose-50"
+                >
+                  <Trash2 className="h-3.5 w-3.5 mr-1" />
+                  Remove
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Company Name Form */}
+        <form onSubmit={handleSaveName} className="space-y-3 bg-slate-50/80 p-3.5 rounded-xl border border-slate-200/80">
+          <Input
+            label="Company / Workspace Name *"
+            value={orgName}
+            onChange={(e) => setOrgName(e.target.value)}
+            placeholder="e.g. Acme Innovations"
+            required
+          />
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">
+              Plan: <span className="font-bold text-indigo-600">{user?.plan || "Starter"}</span>
+            </span>
+            <Button size="sm" type="submit" disabled={isSavingName || orgName === user?.organization_name} className="h-8 text-xs font-semibold">
+              {isSavingName ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save Name"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </Card>
+  );
+}
+
+export default function SettingsPage() {
   const queryClient = useQueryClient();
   
   // Holidays Add Dialog State
@@ -843,9 +1044,12 @@ export default function OfficeSettingsPage() {
       <div className="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 card-shadow">
         <h1 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900">Portal & Geofence Settings</h1>
         <p className="text-xs text-slate-500 mt-0.5">
-          Configure office GPS coordinates, geofenced radius limits, company AI policies, shift rules, and public holidays (India - IST)
+          Configure company branding logo, office GPS coordinates, geofenced radius limits, AI policies, shift rules, and public holidays
         </p>
       </div>
+
+      {/* Company Branding & Logo Card */}
+      <CompanyBrandingCard />
 
       {/* AI Policies Knowledge Base Card */}
       <CompanyPolicyCard />

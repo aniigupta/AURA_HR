@@ -1,9 +1,12 @@
+import os
+import uuid
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, UploadFile, File
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user, RoleChecker
-from app.core.utils import log_audit
+from app.core.utils import log_audit, validate_image_bytes
 from app.models.models import User, OfficeSetting, Holiday, Organization
 from app.schemas.schemas import (
     OfficeSettingOut, OfficeSettingUpdate, HolidayOut, HolidayCreate, MessageResponse,
@@ -46,6 +49,76 @@ def update_organization_details(
     
     log_audit(db, admin_user.id, "ORGANIZATION_UPDATED", request.client.host if request.client else None, f"Org ID: {org.id}", organization_id=org.id)
     return org
+
+@router.post("/organization/logo")
+def upload_organization_logo(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    admin_user: User = Depends(admin_required)
+):
+    org = db.query(Organization).filter(Organization.id == admin_user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    file_ext = os.path.splitext(file.filename or "")[1].lower()
+    if file_ext not in settings.ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Only JPG, JPEG, PNG, and WebP files are allowed")
+
+    if file.content_type not in settings.ALLOWED_UPLOAD_MIME_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid image content type")
+
+    contents = file.file.read()
+    if len(contents) > settings.MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail="File size exceeds the 5 MB limit")
+
+    try:
+        validate_image_bytes(contents)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    unique_filename = f"org_{org.id}_{uuid.uuid4().hex}{file_ext}"
+
+    if settings.S3_ACCESS_KEY:
+        import boto3
+        from botocore.exceptions import ClientError
+        import io
+
+        s3_kwargs = {
+            "aws_access_key_id": settings.S3_ACCESS_KEY,
+            "aws_secret_access_key": settings.S3_SECRET_KEY,
+            "region_name": settings.S3_REGION,
+        }
+        if settings.S3_ENDPOINT:
+            s3_kwargs["endpoint_url"] = settings.S3_ENDPOINT
+
+        try:
+            s3_client = boto3.client("s3", **s3_kwargs)
+            s3_client.upload_fileobj(
+                io.BytesIO(contents),
+                settings.S3_BUCKET,
+                unique_filename,
+                ExtraArgs={"ContentType": file.content_type}
+            )
+            if settings.S3_ENDPOINT:
+                image_url = f"{settings.S3_ENDPOINT}/{settings.S3_BUCKET}/{unique_filename}"
+            else:
+                image_url = f"https://{settings.S3_BUCKET}.s3.{settings.S3_REGION}.amazonaws.com/{unique_filename}"
+        except ClientError as e:
+            raise HTTPException(status_code=500, detail=f"S3 Upload failed: {str(e)}")
+    else:
+        os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+        file_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
+        with open(file_path, "wb") as buffer:
+            buffer.write(contents)
+        image_url = f"/api/static/{unique_filename}"
+
+    org.logo_url = image_url
+    db.commit()
+    db.refresh(org)
+
+    log_audit(db, admin_user.id, "ORGANIZATION_LOGO_UPLOADED", request.client.host if request.client else None, f"Org ID: {org.id}", organization_id=org.id)
+    return {"logo_url": org.logo_url}
 
 # --- Office Settings Endpoints ---
 

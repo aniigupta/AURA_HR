@@ -34,6 +34,50 @@ if settings.SENTRY_DSN:
 # Ensure DB tables are created
 Base.metadata.create_all(bind=engine)
 
+def ensure_schema_columns(bind_engine):
+    """
+    Safely ensures newly added model columns exist in already provisioned database tables.
+    Runs on startup so existing production databases (e.g. Supabase, Render) seamlessly migrate
+    without requiring manual SQL execution or breaking existing data.
+    """
+    from sqlalchemy import inspect, text
+    try:
+        inspector = inspect(bind_engine)
+        table_names = set(inspector.get_table_names())
+        column_definitions = {
+            "organizations": [
+                ("logo_url", "VARCHAR", "NULL"),
+            ],
+            "office_settings": [
+                ("require_selfie", "BOOLEAN", "DEFAULT TRUE"),
+                ("smtp_host", "VARCHAR", "NULL"),
+                ("smtp_port", "INTEGER", "DEFAULT 587"),
+                ("smtp_username", "VARCHAR", "NULL"),
+                ("smtp_password", "VARCHAR", "NULL"),
+                ("smtp_from_email", "VARCHAR", "NULL"),
+                ("smtp_from_name", "VARCHAR", "NULL"),
+                ("smtp_use_tls", "BOOLEAN", "DEFAULT TRUE"),
+            ]
+        }
+        with bind_engine.connect() as conn:
+            is_postgres = bind_engine.dialect.name == "postgresql"
+            for table, cols in column_definitions.items():
+                if table in table_names:
+                    existing_cols = {c["name"] for c in inspector.get_columns(table)}
+                    for col_name, col_type, col_default in cols:
+                        if col_name not in existing_cols:
+                            logger.info(f"Adding missing column '{col_name}' to table '{table}'...")
+                            if is_postgres:
+                                stmt = f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col_name} {col_type} {col_default};"
+                            else:
+                                stmt = f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type};"
+                            conn.execute(text(stmt))
+                            conn.commit()
+    except Exception as e:
+        logger.warning(f"Schema column sync check completed with note: {e}")
+
+ensure_schema_columns(engine)
+
 # Create static uploads directory
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs(os.path.join(settings.UPLOAD_DIR, "selfies"), exist_ok=True)
